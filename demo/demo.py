@@ -182,7 +182,7 @@ if __name__ == '__main__':
     matching = Matching(config).eval().to(device)
 
     # Load the image pair.
-    image0, inp0, scales0 = read_image('./images/test_img1.jpg', device, opt.resize)
+    image0, inp0, scales0 = read_image('./images/test_img1_occ2.jpg', device, opt.resize)
     image1, inp1, scales1 = read_image('./images/test_img2.jpg', device, opt.resize)
 
     pred = matching({'image0': inp0, 'image1': inp1})
@@ -205,6 +205,6 @@ if __name__ == '__main__':
         image0, image1, kpts0, kpts1, mkpts0, mkpts1, color, text,
         path=None, show_keypoints=True)
 
-    cv2.imwrite('./images/test_img1_img2.jpg', out)
+    cv2.imwrite('./images/test_img1_occ2_img2.jpg', out)
     
     print("Matching Finished.")
