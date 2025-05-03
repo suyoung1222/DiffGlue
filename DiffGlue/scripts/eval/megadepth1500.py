@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 from tqdm import tqdm
+import pdb
 
 from ..datasets import get_dataset
 from ..models.cache_loader import CacheLoader
@@ -102,6 +103,7 @@ class MegaDepth1500Pipeline(EvalPipeline):
         pose_results = defaultdict(lambda: defaultdict(list))
         pose_results_dlt = defaultdict(lambda: defaultdict(list))
         cache_loader = CacheLoader({"path": str(pred_file), "collate": None}).eval()
+        # pdb.set_trace()
         for i, data in enumerate(tqdm(loader)):
             pred = cache_loader(data)
             # add custom evaluations here
