@@ -3,7 +3,6 @@ import numpy as np
 import cv2
 import torch
 import pdb
-import time
 
 from models.matching import Matching
 torch.set_grad_enabled(False)
@@ -183,15 +182,10 @@ if __name__ == '__main__':
     matching = Matching(config).eval().to(device)
 
     # Load the image pair.
-    start_pre = time.time()
     image0, inp0, scales0 = read_image('/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/demo/images/test_img1.jpg', device, opt.resize)
     image1, inp1, scales1 = read_image('/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/demo/images/test_img2.jpg', device, opt.resize)
-    end_pre = time.time()
 
-    start_match = time.time()
     pred = matching({'image0': inp0, 'image1': inp1})
-    end_match = time.time()
-    
     
     kpts0 = pred['keypoints0'][0].cpu().numpy()
     kpts1 = pred['keypoints1'][0].cpu().numpy()
@@ -202,11 +196,21 @@ if __name__ == '__main__':
     valid = matches > -1
     mkpts0 = kpts0[valid]
     mkpts1 = kpts1[matches[valid]]
-    
+    color = error_colormap(confidence[valid])
+    text = [
+        'DiffGlue',
+        'Keypoints: {}:{}'.format(len(kpts0), len(kpts1)),
+        'Matches: {}'.format(len(mkpts0))
+    ]
+    out = make_matching_plot_fast(
+        image0, image1, kpts0, kpts1, mkpts0, mkpts1, color, text,
+        path=None, show_keypoints=True)
+
+    cv2.imwrite('./images/test_img1_img2.jpg', out)
+ 
     print("Matching Finished.")
 
     ##### Relative pose estimation based on matches using opencv
-    start_pose = time.time()
     fx = fy = 1000.0
     cx = image0.shape[1] / 2
     cy = image0.shape[0] / 2
@@ -253,12 +257,22 @@ if __name__ == '__main__':
             # Filter inlier matched keypoints based on RANSAC
             inlier_mkpts0 = mkpts0[inliers]
             inlier_mkpts1 = mkpts1[inliers]
+            inlier_color = color[inliers]
 
-    
+            # Generate new text to annotate the image
+            text_inlier = [
+                'DiffGlue + RANSAC',
+                f'Inlier Matches: {len(inlier_mkpts0)} / {len(mkpts0)}'
+            ]
+
+            # Visualize inlier matches only
+            out_ransac = make_matching_plot_fast(
+                image0, image1, kpts0, kpts1, inlier_mkpts0, inlier_mkpts1, inlier_color,
+                text_inlier, path='./images/test_img1_img2_ransac.jpg',
+                show_keypoints=True)
+
+            print("Saved inlier visualization with RANSAC to ./images/test_img1_img2_ransac.jpg")
+
+
         print("Estimated Rotation:\n", R)
         print("Estimated Translation:\n", t)
-    end_pose = time.time()
-
-    print(f"Preprocessing time: {end_pre - start_pre:.4f}s")
-    print(f"Matching time: {end_match - start_match:.4f}s")
-    print(f"Pose estimation time: {end_pose - start_pose:.4f}s")
