@@ -213,7 +213,7 @@ class SpacedDiffusion(GaussianDiffusion):
             self.training = False
             return self.sample(model, cond={"data": pred})
 
-    def loss(self, pred, data):
+    def loss(self, pred, data): # L_diff
         if self.training:
             diffuser_loss = pred["diffuser_loss"]
             losses = {"diffuser_total": diffuser_loss}

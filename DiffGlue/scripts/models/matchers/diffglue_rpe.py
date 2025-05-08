@@ -576,9 +576,21 @@ class DiffGlue(nn.Module):
         adj_mat[...,:-1,-1] = (adj_mat[...,:-1,-1].exp()-0.5)*self.conf.scale
         adj_mat[...,-1,:-1] = (adj_mat[...,-1,:-1].exp()-0.5)*self.conf.scale
 
+        ### Relative Pose Estimation
+
+        #filtered matches
+        m0_f = torch.stack([
+            data["keypoints0"][b, torch.where(m0[b] > -1)[0]] for b in range(len(m0))
+        ])
+        m1_f = torch.stack([
+            data["keypoints1"][b, m0[b][torch.where(m0[b] > -1)[0]]] for b in range(len(m1))
+        ])
+
         pred = {
             "matches0": m0,
             "matches1": m1,
+            "matches0_f": m0_f, #filtered matches
+            "matches1_f": m1_f, #filtered matches
             "matching_scores0": mscores0,
             "matching_scores1": mscores1,
             "ref_descriptors0": torch.stack(all_desc0, 1),
@@ -609,6 +621,7 @@ class DiffGlue(nn.Module):
         losses["row_norm"] = pred["log_assignment"].exp()[:, :-1].sum(2).mean(1)
 
         if self.training:
+            #L_match
             for i in range(N):
                 params_i = loss_params(pred, i)
                 nll, _, _ = self.loss_fn(params_i, data, weights=gt_weights)
@@ -628,10 +641,24 @@ class DiffGlue(nn.Module):
                 ) / (N)
 
                 del params_i
+
+            #L_epipolar
+            if "pose0" in data and "pose1" in data and "K" in data:
+                L_epi = self.loss_fn_epi(
+                    data["keypoints0"],
+                    data["keypoints1"],
+                    pred["matches0"],
+                    data["pose0"],
+                    data["pose1"],
+                    data["K"],
+                    weight=0.1  # or some tunable value
+                )
+                losses["epipolar"] = L_epi
+
         losses["matcher_total"] /= sum_weights
         # confidences
         if self.training:
-            losses["matcher_total"] = losses["matcher_total"] + losses["confidence"]
+            losses["matcher_total"] = losses["matcher_total"] + losses["confidence"] + losses["epipolar"] # TODO: lambda??weight??
 
         if not self.training:
             # add metrics
@@ -639,6 +666,54 @@ class DiffGlue(nn.Module):
         else:
             metrics = {}
         return losses, metrics
+    
+
+    def loss_fn_epi(kpts0, kpts1, matches0, pose0, pose1, K, weight=1.0): # mean epipolar loss for each matches
+        """
+        kpts0, kpts1: [B, N, 2]
+        matches0: [B, N] → indices in kpts1 or -1
+        pose0, pose1: [B, 4, 4]
+        K: [B, 3, 3]
+        """
+        B = kpts0.shape[0]
+        total_loss = 0.0
+        for b in range(B):
+            m0 = matches0[b]  # [N]
+            valid = m0 > -1
+            x0 = kpts0[b][valid]  # [M, 2]
+            x1 = kpts1[b][m0[valid]]  # [M, 2]
+
+            if x0.shape[0] < 8:
+                continue
+
+            # Normalize to camera coordinates
+            K_inv = torch.inverse(K[b])
+            x0_h = F.pad(x0, (0, 1), value=1.0)  # [M, 3]
+            x1_h = F.pad(x1, (0, 1), value=1.0)
+
+            x0_cam = (K_inv @ x0_h.T).T
+            x1_cam = (K_inv @ x1_h.T).T
+
+            # Relative pose: T = T1 * T0^-1
+            T_rel = pose1[b] @ torch.inverse(pose0[b])
+            R = T_rel[:3, :3]
+            t = T_rel[:3, 3]
+
+            # Essential matrix
+            tx = torch.tensor([
+                [0, -t[2], t[1]],
+                [t[2], 0, -t[0]],
+                [-t[1], t[0], 0]
+            ], device=t.device)
+
+            E = tx @ R  # [3,3]
+
+            # Residuals: x1^T E x0
+            r = torch.einsum('bi,ij,bj->b', x1_cam, E, x0_cam)  # [M]
+            loss = (r ** 2).mean()
+            total_loss += loss
+
+        return weight * total_loss / B
 
 
 __main_model__ = DiffGlue
