@@ -12,7 +12,7 @@ from ...settings import DATA_PATH
 from ..utils.losses import NLLLoss
 from ..utils.metrics import matcher_metrics
 from ..utils.net import timestep_embedding
-from ..utils.pose_utils import backproject_to_3d, epipolar_loss, solve_pnp_ransac, sampson_epipolar_loss
+from ..utils.pose_utils import epipolar_loss, solve_pnp_ransac, sampson_epipolar_loss
 
 FLASH_AVAILABLE = hasattr(F, "scaled_dot_product_attention")
 
@@ -578,7 +578,16 @@ class DiffGlue(nn.Module):
         adj_mat[...,:-1,-1] = (adj_mat[...,:-1,-1].exp()-0.5)*self.conf.scale
         adj_mat[...,-1,:-1] = (adj_mat[...,-1,:-1].exp()-0.5)*self.conf.scale
 
-        ### TODO: Relative Pose Estimation
+        ### TODO: Relative Pose Estimation (PnP vs W/o depth)
+        if "depths0" in data:
+            Esti_T_0to1 = solve_pnp_ransac(data["keypoints0"],
+                                            data["keypoints1"],
+                                            pred["matches0"],
+                                            data['view0']['camera'],
+                                            data['view1']['camera'],
+                                            pred["depths0"]) # kpts0, kpts1, matches0, cam0, cam1, depth0
+        else:
+            Esti_T_0to1 = None
 
         pred = {
             "matches0": m0,
@@ -589,6 +598,7 @@ class DiffGlue(nn.Module):
             "ref_descriptors1": torch.stack(all_desc1, 1),
             "log_assignment": scores,
             "adj_mat": adj_mat,
+            "Esti_T_0to1": Esti_T_0to1
         }
 
         return pred

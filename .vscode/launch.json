@@ -5,7 +5,7 @@
         "name": "Debug DiffGlue Training",
         "type": "python",
         "request": "launch",
-        "module": "scripts.train",
+        "module": "scripts.train_deb",
         "args": [
           // "SP+DiffGlue_homography",
           // "--conf", "scripts/configs/superpoint+diffglue_homography.yaml",

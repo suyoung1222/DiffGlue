@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import cv2
+from ...geometry.wrappers import Camera, Pose
+
 
 def build_K_matrix(f, c):
     """
@@ -23,49 +25,81 @@ def build_K_matrix(f, c):
     K[:, 2, 2] = 1.0
     return K
 
-def backproject_to_3d(kpts, depth_map, K):
+
+def backproject_keypoints(kpts2d, depth, K):
     """
-    kpts: [N, 2] tensor of image coordinates
-    depth_map: [H, W] numpy array
-    K: [3, 3] numpy array (intrinsics)
-    returns: [N, 3] tensor of 3D points
+    kpts2d: [N, 2] tensor
+    depth: [H, W] tensor
+    K: [3, 3] tensor
+    Returns: [N, 3] 3D points in camera coordinates
     """
-    pts3d = []
-    for pt in kpts:
-        u, v = int(pt[0]), int(pt[1])
-        if 0 <= v < depth_map.shape[0] and 0 <= u < depth_map.shape[1]:
-            z = depth_map[v, u]
-            if z <= 0:
-                continue
-            x = (u - K[0, 2]) * z / K[0, 0]
-            y = (v - K[1, 2]) * z / K[1, 1]
-            pts3d.append([x, y, z])
-    return torch.tensor(pts3d, dtype=torch.float32)
+    H, W = depth.shape
+    u = kpts2d[:, 0].long().clamp(0, W - 1)
+    v = kpts2d[:, 1].long().clamp(0, H - 1)
+    z = depth[v, u]
+    valid = z > 0
+
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
+
+    x = (kpts2d[:, 0] - cx) * z / fx
+    y = (kpts2d[:, 1] - cy) * z / fy
+    pts3d = torch.stack([x, y, z], dim=-1)
+    return pts3d[valid], kpts2d[valid]
 
 
-def solve_pnp_ransac(kpts2d, pts3d, K):
+def solve_pnp_ransac(kpts0, kpts1, matches0, cam0, cam1, depth0):
     """
-    kpts2d: [N, 2] 2D keypoints in image 0
-    pts3d: [N, 3] 3D keypoints from image 1
-    K: [3, 3] numpy array
-    returns: 4x4 SE(3) transform from frame1 to frame0
+    Estimate T_0to1 using PnP with depth0 and 2D-2D matches.
+    Inputs:
+        kpts0, kpts1: [N, 2] 2D keypoints
+        matches0: [N] matched indices in kpts1 or -1
+        cam0, cam1: camera objects with intrinsics f, c
+        depth0: [H, W] depth map for view0
+    Returns:
+        T_0to1: [4, 4] torch SE(3) matrix
+        0 is follower, 1 is leader
+        T_0to1 = T_0^1 = Follower robot's pose w.r.t leader robot
     """
-    if len(kpts2d) < 6 or len(pts3d) < 6:
-        return None
+    K0 = build_K_matrix(cam0.f, cam0.c)  # for backprojection
+    K1 = build_K_matrix(cam1.f, cam1.c)  # for projection
 
-    pts2d_np = kpts2d.cpu().numpy().astype(np.float32)
+    matched_mask = matches0 > -1
+    idx0 = torch.arange(len(matches0))[matched_mask]
+    idx1 = matches0[matched_mask]
+
+    if len(idx0) < 6:
+        return torch.eye(4, dtype=torch.float32, device=kpts0.device)
+
+    pts0 = kpts0[idx0]
+    pts1 = kpts1[idx1]
+
+    pts3d, valid_pts0 = backproject_keypoints(pts0, depth0, K0)
+    pts2d = pts1[(valid_pts0.sum(-1) > 0)]  # same filtering
+
+    if len(pts2d) < 6: # TODO: need another back up plan than identity
+        return torch.eye(4, dtype=torch.float32, device=kpts0.device)
+
+    # Convert to NumPy
     pts3d_np = pts3d.cpu().numpy().astype(np.float32)
-    K_np = K.cpu().numpy()
+    pts2d_np = pts2d.cpu().numpy().astype(np.float32)
+    K_np = K1.cpu().numpy().astype(np.float32)  # use K1=leader!
 
+    # Solve PnP
     success, rvec, tvec, _ = cv2.solvePnPRansac(pts3d_np, pts2d_np, K_np, None)
-    if not success:
-        return None
+
+    if not success: # TODO: need another back up plan than identity or do None
+        return torch.eye(4, dtype=torch.float32, device=kpts0.device)
 
     R, _ = cv2.Rodrigues(rvec)
     T = np.eye(4)
     T[:3, :3] = R
     T[:3, 3] = tvec.flatten()
-    return torch.tensor(T, dtype=torch.float32)
+
+    R = torch.from_numpy(R).float().to(device=kpts0.device)
+    t = torch.from_numpy(tvec.flatten()).float().to(device=kpts0.device)
+    return Pose.from_Rt(R, t)
+
 
 
 def epipolar_loss(kpts0, kpts1, matches0, T0to1, cam0, cam1, weight=1.0):
@@ -76,6 +110,7 @@ def epipolar_loss(kpts0, kpts1, matches0, T0to1, cam0, cam1, weight=1.0):
     matches0: [B, N] → indices in kpts1 or -1
     pose0, pose1: [B, 4, 4] ground truth poses
     K: [B, 3, 3]
+    0 is follower, 1 is leader
     """
    
     K0 = build_K_matrix(cam0.f, cam0.c)
