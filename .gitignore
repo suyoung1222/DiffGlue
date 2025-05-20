@@ -177,4 +177,3 @@ outputs/
 DiffGlue/data_su/
 DiffGlue/sbatch_*.txt
 *.sbatch
-DiffGlue/scripts/models/utils/pose_utils.py
