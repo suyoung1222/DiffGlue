@@ -100,7 +100,7 @@ class TwoViewPipeline(BaseModel):
             pred = {**pred, **self.solver({**data, **pred})}
         return pred
 
-    def loss(self, pred, data):
+    def loss(self, pred, data): # TODO 뭔가 여기서 뭔가 diff loss랑 mathc loss합치고 거시기 하는것같은데 주의
         losses = {}
         metrics = {}
         total = 0

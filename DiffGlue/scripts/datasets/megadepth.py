@@ -79,24 +79,59 @@ class MegaDepth(BaseDataset):
             logger.info("Downloading the MegaDepth dataset.")
             self.download()
 
+    # def download(self):
+    #     data_dir = DATA_PATH / self.conf.data_dir
+    #     tmp_dir = data_dir.parent / "megadepth_tmp"
+    #     if tmp_dir.exists():  # The previous download failed.
+    #         shutil.rmtree(tmp_dir)
+    #     tmp_dir.mkdir(exist_ok=True, parents=True)
+    #     url_base = "https://cvg-data.inf.ethz.ch/megadepth/"
+    #     for tar_name, out_name in (
+    #         ("Undistorted_SfM.tar.gz", self.conf.image_subpath),
+    #         ("depth_undistorted.tar.gz", self.conf.depth_subpath),
+    #         ("scene_info.tar.gz", self.conf.info_dir),
+    #     ):
+    #         tar_path = tmp_dir / tar_name
+    #         torch.hub.download_url_to_file(url_base + tar_name, tar_path)
+    #         with tarfile.open(tar_path) as tar:
+    #             tar.extractall(path=tmp_dir)
+    #         tar_path.unlink()
+    #         shutil.move(tmp_dir / tar_name.split(".")[0], tmp_dir / out_name)
+    #     shutil.move(tmp_dir, data_dir)
     def download(self):
+        from joblib import Parallel, delayed
+
         data_dir = DATA_PATH / self.conf.data_dir
         tmp_dir = data_dir.parent / "megadepth_tmp"
-        if tmp_dir.exists():  # The previous download failed.
+        if tmp_dir.exists():  # Previous download failed
             shutil.rmtree(tmp_dir)
         tmp_dir.mkdir(exist_ok=True, parents=True)
+
         url_base = "https://cvg-data.inf.ethz.ch/megadepth/"
-        for tar_name, out_name in (
+        tar_files = [
             ("Undistorted_SfM.tar.gz", self.conf.image_subpath),
             ("depth_undistorted.tar.gz", self.conf.depth_subpath),
             ("scene_info.tar.gz", self.conf.info_dir),
-        ):
+        ]
+
+        def download_and_extract(tar_name, out_name):
             tar_path = tmp_dir / tar_name
-            torch.hub.download_url_to_file(url_base + tar_name, tar_path)
-            with tarfile.open(tar_path) as tar:
-                tar.extractall(path=tmp_dir)
-            tar_path.unlink()
-            shutil.move(tmp_dir / tar_name.split(".")[0], tmp_dir / out_name)
+            try:
+                logger.info(f"Downloading {tar_name} ...")
+                torch.hub.download_url_to_file(url_base + tar_name, tar_path)
+                logger.info(f"Extracting {tar_name} ...")
+                with tarfile.open(tar_path) as tar:
+                    tar.extractall(path=tmp_dir)
+                tar_path.unlink()
+                shutil.move(tmp_dir / tar_name.split(".")[0], tmp_dir / out_name)
+                logger.info(f"Finished {tar_name}")
+            except Exception as e:
+                logger.error(f"Failed to download or extract {tar_name}: {e}")
+
+        Parallel(n_jobs=3)(
+            delayed(download_and_extract)(tar_name, out_name) for tar_name, out_name in tar_files
+        )
+
         shutil.move(tmp_dir, data_dir)
 
     def get_dataset(self, split):
@@ -349,7 +384,7 @@ class _PairDataset(torch.utils.data.Dataset):
             }
             data["T_0to1"] = data1["T_w2cam"] @ data0["T_w2cam"].inv()
             data["T_1to0"] = data0["T_w2cam"] @ data1["T_w2cam"].inv()
-            data["overlap_0to1"] = overlap
+            data["overlap_0to1"] = overlap # TODO: what's overlap???
             data["name"] = f"{scene}/{data0['name']}_{data1['name']}"
         else:
             assert self.conf.views == 1

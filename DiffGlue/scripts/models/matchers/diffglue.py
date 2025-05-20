@@ -12,6 +12,7 @@ from ...settings import DATA_PATH
 from ..utils.losses import NLLLoss
 from ..utils.metrics import matcher_metrics
 from ..utils.net import timestep_embedding
+from ..utils.pose_utils import backproject_to_3d, epipolar_loss, solve_pnp_ransac, sampson_epipolar_loss
 
 FLASH_AVAILABLE = hasattr(F, "scaled_dot_product_attention")
 
@@ -424,7 +425,8 @@ class DiffGlue(nn.Module):
         },
     }
 
-    required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1"]
+    # required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1"] 
+    required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1", "T_0to1"] 
 
     def __init__(self, conf) -> None:
         super().__init__()
@@ -576,6 +578,8 @@ class DiffGlue(nn.Module):
         adj_mat[...,:-1,-1] = (adj_mat[...,:-1,-1].exp()-0.5)*self.conf.scale
         adj_mat[...,-1,:-1] = (adj_mat[...,-1,:-1].exp()-0.5)*self.conf.scale
 
+        ### TODO: Relative Pose Estimation
+
         pred = {
             "matches0": m0,
             "matches1": m1,
@@ -609,6 +613,7 @@ class DiffGlue(nn.Module):
         losses["row_norm"] = pred["log_assignment"].exp()[:, :-1].sum(2).mean(1)
 
         if self.training:
+            #L_match
             for i in range(N):
                 params_i = loss_params(pred, i)
                 nll, _, _ = self.loss_fn(params_i, data, weights=gt_weights)
@@ -628,10 +633,26 @@ class DiffGlue(nn.Module):
                 ) / (N)
 
                 del params_i
+
+            #L_epipolar
+            if "T_0to1" in data:
+                L_epi = sampson_epipolar_loss( #32개 이미지 쌍이 들어감!
+                    data["keypoints0"],
+                    data["keypoints1"],
+                    pred["matches0"],
+                    data["T_0to1"],
+                    data['view0']['camera'],
+                    data['view1']['camera'],
+                    weight=0.1  # or some tunable value
+                ) # kpts0, kpts1, matches0, T0to1, cam0, cam1, weight=1.0
+                losses["geometry"] = L_epi
+            else:
+                losses["geometry"] = 1.0
+
         losses["matcher_total"] /= sum_weights
         # confidences
         if self.training:
-            losses["matcher_total"] = losses["matcher_total"] + losses["confidence"]
+            losses["matcher_total"] = losses["matcher_total"] + losses["confidence"] + losses["geometry"] # TODO: lambda??weight??
 
         if not self.training:
             # add metrics
@@ -639,6 +660,7 @@ class DiffGlue(nn.Module):
         else:
             metrics = {}
         return losses, metrics
+    
 
 
 __main_model__ = DiffGlue
