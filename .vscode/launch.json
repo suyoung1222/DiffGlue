@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Debug DiffGlue Training",
+        "type": "python",
+        "request": "launch",
+        "module": "scripts.train",
+        "args": [
+          // "SP+DiffGlue_homography",
+          // "--conf", "scripts/configs/superpoint+diffglue_homography.yaml",
+          // "--run_benchmarks"
+          "SP+DiffGlue_megadepth",
+          "--conf", "scripts/configs/superpoint+diffglue_megadepth.yaml",
+          // "--run_benchmarks",
+          "train.load_experiment=SP+DiffGlue_homography",
+          "data.load_features.do=True"
+        ],
+        "justMyCode": false,
+        "console": "integratedTerminal",
+        "cwd": "${workspaceFolder}/DiffGlue",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/DiffGlue"
+        }
+      }
+    ]
+  }
+  

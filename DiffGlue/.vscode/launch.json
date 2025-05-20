@@ -1,0 +1,24 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Debug DiffGlue Training",
+        "type": "python",
+        "request": "launch",
+        "console": "integratedTerminal",
+        "program": "scripts/train.py",
+        "args": [
+          "SP+DiffGlue_homography",
+          "--conf", "scripts/configs/superpoint+diffglue_homography.yaml",
+          "--run_benchmarks"
+        ],
+        "justMyCode": false,
+        "console": "integratedTerminal",
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}"
+        }
+      }
+    ]
+  }
+  
