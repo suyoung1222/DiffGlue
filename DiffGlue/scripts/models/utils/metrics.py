@@ -36,6 +36,7 @@ def matcher_metrics(pred, data, prefix="", prefix_gt=None):
     rec = recall(pred[f"{prefix}matches0"], data[f"gt_{prefix_gt}matches0"])
     prec = precision(pred[f"{prefix}matches0"], data[f"gt_{prefix_gt}matches0"])
     acc = accuracy(pred[f"{prefix}matches0"], data[f"gt_{prefix_gt}matches0"])
+    #TODO: add pose estimation metric
     ap = ranking_ap(
         pred[f"{prefix}matches0"],
         data[f"gt_{prefix_gt}matches0"],

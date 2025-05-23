@@ -1,0 +1,7 @@
+Loading conda
+Loading cuda version 12.1
+[05/23/2025 17:02:47 scripts INFO] Starting experiment SP+DiffGlue_homography
+[05/23/2025 17:03:00 scripts INFO] Using device cuda
+[05/23/2025 17:03:08 scripts.datasets.base_dataset INFO] Creating dataset MegaDepth
+[05/23/2025 17:03:31 scripts.datasets.megadepth INFO] Sampling new train data with seed 0.
+slurmstepd-gpu028: error: *** JOB 35759802 ON gpu028 CANCELLED AT 2025-05-23T17:05:50 ***

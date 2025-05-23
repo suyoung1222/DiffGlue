@@ -177,3 +177,4 @@ outputs/
 DiffGlue/data_su/
 DiffGlue/sbatch_*.txt
 *.sbatch
+/slurm

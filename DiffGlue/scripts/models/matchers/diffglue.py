@@ -579,13 +579,13 @@ class DiffGlue(nn.Module):
         adj_mat[...,-1,:-1] = (adj_mat[...,-1,:-1].exp()-0.5)*self.conf.scale
 
         ### TODO: Relative Pose Estimation (PnP vs W/o depth)
-        if "depths0" in data:
+        if "depth" in data['view0']:
             Esti_T_0to1 = solve_pnp_ransac(data["keypoints0"],
                                             data["keypoints1"],
-                                            pred["matches0"],
+                                            m0,
                                             data['view0']['camera'],
                                             data['view1']['camera'],
-                                            pred["depths0"]) # kpts0, kpts1, matches0, cam0, cam1, depth0
+                                            data['view0']['depth']) # kpts0, kpts1, matches0, cam0, cam1, depth0
         else:
             Esti_T_0to1 = None
 
@@ -657,7 +657,7 @@ class DiffGlue(nn.Module):
                 ) # kpts0, kpts1, matches0, T0to1, cam0, cam1, weight=1.0
                 losses["geometry"] = L_epi
             else:
-                losses["geometry"] = 1.0
+                losses["geometry"] = 0.0
 
         losses["matcher_total"] /= sum_weights
         # confidences

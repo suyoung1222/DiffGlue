@@ -1,0 +1,163 @@
+Removing conda
+Loading conda
+Removing cuda version 12.1
+Loading cuda version 12.1
+[05/23/2025 19:44:40 scripts INFO] Starting experiment SP+DiffGlue_megadepth
+[05/23/2025 19:44:40 scripts INFO] Will fine-tune from weights of SP+DiffGlue_homography
+[05/23/2025 19:44:41 scripts INFO] Using device cuda
+[05/23/2025 19:44:48 scripts.datasets.base_dataset INFO] Creating dataset MegaDepth
+[05/23/2025 19:45:14 scripts.datasets.megadepth INFO] Sampling new train data with seed 0.
+[05/23/2025 19:50:08 scripts.datasets.megadepth INFO] Sampling new val data with seed 0.
+[05/23/2025 19:50:08 scripts INFO] Training loader has 1434 batches
+[05/23/2025 19:50:08 scripts INFO] Validation loader has 47 batches
+[05/23/2025 19:50:09 scripts INFO] Parameters with scaled learning rate:
+{}
+[05/23/2025 19:50:09 scripts INFO] Training with mixed_precision=None
+[05/23/2025 19:50:09 scripts INFO] Starting training with configuration:
+data:
+  name: megadepth
+  preprocessing:
+    resize: 1024
+    side: long
+    square_pad: true
+  train_split: train_scenes_clean.txt
+  train_num_per_scene: 300
+  val_split: valid_scenes_clean.txt
+  val_pairs: valid_pairs.txt
+  min_overlap: 0.1
+  max_overlap: 0.7
+  num_overlap_bins: 3
+  read_depth: true
+  read_image: true
+  batch_size: 32
+  num_workers: 8
+  load_features:
+    do: true
+    path: exports/megadepth-undist-depth-r1024_SP-k2048-nms3/{scene}.h5
+    padding_length: 2048
+    padding_fn: pad_local_features
+model:
+  name: two_view_pipeline
+  extractor:
+    name: extractors.superpoint
+    max_num_keypoints: 2048
+    force_num_keypoints: true
+    detection_threshold: 0.0
+    nms_radius: 3
+    trainable: false
+  matcher:
+    name: matchers.diffglue
+    filter_threshold: 0.1
+    flash: false
+    checkpointed: true
+    n_layers: 9
+    scale: 2
+  ground_truth:
+    name: matchers.depth_matcher
+    th_positive: 3
+    th_negative: 5
+    th_epi: 5
+  diffuser:
+    name: diffusers.diffuser
+    steps: 4096
+    learn_sigma: false
+    sigma_small: false
+    noise_schedule: linear
+    use_kl: false
+    predict_xstart: true
+    rescale_timesteps: true
+    rescale_learned_sigmas: true
+    timestep_respacing: ''
+    ddim_steps: 2
+    schedule_sampler: uniform
+    use_ddim: true
+    clip_denoised: true
+    diffuser_loss_weight: 1
+    scale: 2
+  allow_no_extract: true
+train:
+  seed: 0
+  epochs: 40
+  optimizer: adam
+  opt_regexp: null
+  optimizer_options: {}
+  lr: 0.0001
+  lr_schedule:
+    type: exp
+    start: 3
+    exp_div_10: 10
+    on_epoch: true
+    factor: 1.0
+    options: {}
+  lr_scaling:
+  - - 100
+    - - dampingnet.const
+  eval_every_iter: 1000
+  save_every_iter: 5000
+  log_every_iter: 100
+  log_grad_every_iter: null
+  test_every_epoch: 1
+  keep_last_checkpoints: 10
+  load_experiment: SP+DiffGlue_homography
+  median_metrics: []
+  recall_metrics: {}
+  pr_metrics: {}
+  best_key: loss/total
+  dataset_callback_fn: sample_new_items
+  dataset_callback_on_val: false
+  clip_grad: null
+  pr_curves: {}
+  plot: null
+  submodules: []
+benchmarks:
+  megadepth1500:
+    data:
+      preprocessing:
+        side: long
+        resize: 1600
+    eval:
+      estimator: opencv
+      ransac_th: 0.5
+  hpatches:
+    eval:
+      estimator: opencv
+      ransac_th: 0.5
+    model:
+      extractor:
+        max_num_keypoints: 1024
+
+[05/23/2025 19:50:09 scripts INFO] Starting epoch 0
+{'name': 'two_view_pipeline', 'extractor': {'name': 'extractors.superpoint', 'max_num_keypoints': 2048, 'force_num_keypoints': True, 'detection_threshold': 0.0, 'nms_radius': 3, 'trainable': False}, 'matcher': {'name': 'matchers.diffglue', 'filter_threshold': 0.1, 'flash': False, 'checkpointed': True, 'n_layers': 9, 'scale': 2}, 'ground_truth': {'name': 'matchers.depth_matcher', 'th_positive': 3, 'th_negative': 5, 'th_epi': 5}, 'diffuser': {'name': 'diffusers.diffuser', 'steps': 4096, 'learn_sigma': False, 'sigma_small': False, 'noise_schedule': 'linear', 'use_kl': False, 'predict_xstart': True, 'rescale_timesteps': True, 'rescale_learned_sigmas': True, 'timestep_respacing': '', 'ddim_steps': 2, 'schedule_sampler': 'uniform', 'use_ddim': True, 'clip_denoised': True, 'diffuser_loss_weight': 1, 'scale': 2}, 'allow_no_extract': True}
+  0%|          | 0/1434 [00:00<?, ?it/s]  0%|          | 0/1434 [01:25<?, ?it/s]
+Traceback (most recent call last):
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 683, in <module>
+    main_worker(0, conf, output_dir, args)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 620, in main_worker
+    training(rank, conf, output_dir, args)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 422, in training
+    pred = model(data)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/models/base_model.py", line 114, in forward
+    return self._forward(data)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/models/two_view_pipeline.py", line 92, in _forward
+    pred = {**pred, **self.diffuser(self.matcher, {**data, **pred})}
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/models/diffusers/diffuser.py", line 209, in __call__
+    results = self.training_losses(model, *args, **kwargs) # "loss", "vb"
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/models/diffusers/diffuser.py", line 153, in training_losses
+    return super().training_losses(self._wrap_model(model), *args, **kwargs)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/models/diffusers/gaussian_diffusion.py", line 727, in training_losses
+    model_output_all = model(x_t, self._scale_timesteps(t), **model_kwargs)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/models/diffusers/diffuser.py", line 237, in __call__
+    return self.model(x, new_ts, **kwargs)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/models/matchers/diffglue.py", line 583, in forward
+    Esti_T_0to1 = solve_pnp_ransac(data["keypoints0"],
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/models/utils/pose_utils.py", line 141, in solve_pnp_ransac
+    R = T0to1[b].R
+IndexError: The shape of the mask [286] at index 0 does not match the shape of the indexed tensor [297, 2] at index 0

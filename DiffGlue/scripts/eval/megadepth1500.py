@@ -54,7 +54,7 @@ class MegaDepth1500Pipeline(EvalPipeline):
         "matches0",
         "matches1",
         "matching_scores0",
-        "matching_scores1",
+        "matching_scores1"
     ]
     optional_export_keys = []
 
@@ -82,6 +82,8 @@ class MegaDepth1500Pipeline(EvalPipeline):
         if not pred_file.exists() or overwrite:
             if model is None:
                 model = load_model(self.conf.model, self.conf.checkpoint)
+                print("checkpoint: ")
+                print(self.conf.checkpoint)
             export_predictions(
                 self.get_dataloader(self.conf.data),
                 model,
@@ -146,6 +148,7 @@ class MegaDepth1500Pipeline(EvalPipeline):
         best_pose_results_dlt, best_th_dlt = eval_poses(
             pose_results_dlt, auc_ths=[5, 10, 20], key="rel_pose_error_dlt"
         )
+
         results = {**results, **pose_results[best_th]}
         results = {**results, **pose_results_dlt[best_th_dlt]}
         summaries = {
@@ -153,6 +156,8 @@ class MegaDepth1500Pipeline(EvalPipeline):
             **best_pose_results,
             **best_pose_results_dlt,
         }
+
+
 
         figures = {
             "pose_recall": plot_cumulative(
@@ -168,6 +173,11 @@ class MegaDepth1500Pipeline(EvalPipeline):
                 title="Pose_dlt ",
             )
         }
+
+        if "Esti_T_0to1" in pred:
+            print("######Estimated Pose: ", pred["Esti_T_0to1"])
+        else:
+            print("###### no Esti!!!!")
 
         return summaries, figures, results
 

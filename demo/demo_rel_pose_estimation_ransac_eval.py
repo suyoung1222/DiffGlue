@@ -184,7 +184,7 @@ if __name__ == '__main__':
     # Load the image pair.
     image0, inp0, scales0 = read_image('/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/demo/images/test_img1.jpg', device, opt.resize)
     image1, inp1, scales1 = read_image('/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/demo/images/test_img2.jpg', device, opt.resize)
-
+    pdb.set_trace()
     pred = matching({'image0': inp0, 'image1': inp1})
     
     kpts0 = pred['keypoints0'][0].cpu().numpy()

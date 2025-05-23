@@ -54,7 +54,7 @@ default_train_conf = {
     },
     "lr_scaling": [(100, ["dampingnet.const"])],
     "eval_every_iter": 1000,  # interval for evaluation on the validation set
-    "save_every_iter": 5000,  # interval for saving the current checkpoint
+    "save_every_iter": 500,  # interval for saving the current checkpoint
     "log_every_iter": 200,  # interval for logging the loss to the console
     "log_grad_every_iter": None,  # interval for logging gradient hists
     "test_every_epoch": 1,  # interval for evaluation on the test benchmarks
@@ -89,7 +89,7 @@ def do_evaluation(model, loader, device, loss_fn, conf, pbar=True):
         data = batch_to_device(data, device, non_blocking=True)
         with torch.no_grad():
             pred = model(data)
-            losses, metrics = loss_fn(pred, data)
+            losses, metrics = loss_fn(pred, data) # TODO: add pose estimation precision metric
             if conf.plot is not None and i in plot_ids:
                 figures.append(locate(plot_fn)(pred, data))
             # add PR curves
@@ -421,7 +421,7 @@ def training(rank, conf, output_dir, args):
                 data = batch_to_device(data, device, non_blocking=True)
                 pred = model(data)
                 losses, _ = loss_fn(pred, data)
-                loss = torch.mean(losses["total"])
+                loss = torch.mean(losses["total"]) # TODO: 여기 pred에 Esti_T0to1 있음
             if torch.isnan(loss).any():
                 print(f"Detected NAN, skipping iteration {it}")
                 del pred, data, loss, losses
@@ -505,7 +505,7 @@ def training(rank, conf, output_dir, args):
                             norm = torch.norm(param.grad.detach(), 2)
                             grad_txt += f"{name} {norm.item():.3f}  \n"
                     writer.add_text("grad/summary", grad_txt, tot_n_samples)
-            del pred, data, loss, losses
+            del pred, data, #loss, losses
 
             # Run validation
             if (
@@ -548,7 +548,7 @@ def training(rank, conf, output_dir, args):
                             optimizer,
                             lr_scheduler,
                             conf,
-                            losses_,
+                            losses,
                             results,
                             best_eval,
                             epoch,
@@ -578,7 +578,7 @@ def training(rank, conf, output_dir, args):
                     optimizer,
                     lr_scheduler,
                     conf,
-                    losses_,
+                    losses,
                     results,
                     best_eval,
                     epoch,
@@ -597,7 +597,7 @@ def training(rank, conf, output_dir, args):
                 optimizer,
                 lr_scheduler,
                 conf,
-                losses_,
+                losses,
                 results,
                 best_eval,
                 epoch,

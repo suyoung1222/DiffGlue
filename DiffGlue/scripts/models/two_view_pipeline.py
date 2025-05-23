@@ -88,7 +88,7 @@ class TwoViewPipeline(BaseModel):
             pred.update({f"gt_{k}": v for k, v in gt_pred.items()})
 
         if self.conf.diffuser.name and self.conf.matcher.name:
-            if self.training:
+            if self.training: # TODO: 여기 pred에는 Esti_T0to1이 없음!!!
                 pred = {**pred, **self.diffuser(self.matcher, {**data, **pred})}
             else:
                 pred = {**pred, **self.eval_diffuser(self.matcher, {**data, **pred})}

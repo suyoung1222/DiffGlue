@@ -45,7 +45,7 @@ def backproject_keypoints(kpts2d, depth, K):
     x = (kpts2d[:, 0] - cx) * z / fx
     y = (kpts2d[:, 1] - cy) * z / fy
     pts3d = torch.stack([x, y, z], dim=-1)
-    return pts3d[valid], kpts2d[valid]
+    return pts3d[valid], kpts2d[valid], valid
 
 
 def solve_pnp_ransac(kpts0, kpts1, matches0, cam0, cam1, depth0):
@@ -61,44 +61,53 @@ def solve_pnp_ransac(kpts0, kpts1, matches0, cam0, cam1, depth0):
         0 is follower, 1 is leader
         T_0to1 = T_0^1 = Follower robot's pose w.r.t leader robot
     """
-    K0 = build_K_matrix(cam0.f, cam0.c)  # for backprojection
-    K1 = build_K_matrix(cam1.f, cam1.c)  # for projection
+    K0_batch = build_K_matrix(cam0.f, cam0.c)  # for backprojection
+    K1_batch = build_K_matrix(cam1.f, cam1.c)  # for projection
+    B = kpts0.shape[0]
+    T_list = []
+    identity_pose = Pose.from_Rt(
+                torch.eye(3, device=kpts0.device),
+                torch.zeros(3, device=kpts0.device)
+            )
+    
+    for b in range(B):
+        m0 = matches0[b]  # [N]
+        valid = m0 > -1
+        if valid.sum() < 6:
+            T_list.append(identity_pose)
+            continue
 
-    matched_mask = matches0 > -1
-    idx0 = torch.arange(len(matches0))[matched_mask]
-    idx1 = matches0[matched_mask]
+        idx0 = torch.arange(kpts0.shape[1], device=kpts0.device)[valid]
+        idx1 = m0[valid]
 
-    if len(idx0) < 6:
-        return torch.eye(4, dtype=torch.float32, device=kpts0.device)
+        pts0 = kpts0[b][idx0]
+        pts1 = kpts1[b][idx1]
 
-    pts0 = kpts0[idx0]
-    pts1 = kpts1[idx1]
+        pts3d, valid_pts0, valid = backproject_keypoints(pts0, depth0[b], K0_batch[b])
+        pts2d = pts1[valid]   # filter with valid z
 
-    pts3d, valid_pts0 = backproject_keypoints(pts0, depth0, K0)
-    pts2d = pts1[(valid_pts0.sum(-1) > 0)]  # same filtering
 
-    if len(pts2d) < 6: # TODO: need another back up plan than identity
-        return torch.eye(4, dtype=torch.float32, device=kpts0.device)
+        if len(pts2d) < 6: # TODO: need another back up plan than identity
+            T_list.append(identity_pose)
+            continue
 
-    # Convert to NumPy
-    pts3d_np = pts3d.cpu().numpy().astype(np.float32)
-    pts2d_np = pts2d.cpu().numpy().astype(np.float32)
-    K_np = K1.cpu().numpy().astype(np.float32)  # use K1=leader!
+        # Convert to NumPy
+        pts3d_np = pts3d.cpu().numpy().astype(np.float32)
+        pts2d_np = pts2d.cpu().numpy().astype(np.float32)
+        K_np = K1_batch[b].cpu().numpy().astype(np.float32) #K1 leader
 
-    # Solve PnP
-    success, rvec, tvec, _ = cv2.solvePnPRansac(pts3d_np, pts2d_np, K_np, None)
+        # Solve PnP
+        success, rvec, tvec, _ = cv2.solvePnPRansac(pts3d_np, pts2d_np, K_np, None)
+        if not success: # TODO: need another back up plan than identity or do None
+            T_list.append(identity_pose)
+            continue
 
-    if not success: # TODO: need another back up plan than identity or do None
-        return torch.eye(4, dtype=torch.float32, device=kpts0.device)
+        R, _ = cv2.Rodrigues(rvec)
+        R_torch = torch.from_numpy(R).float().to(device=kpts0.device)
+        t_torch = torch.from_numpy(tvec.flatten()).float().to(device=kpts0.device)
+        T_list.append(Pose.from_Rt(R_torch, t_torch))
 
-    R, _ = cv2.Rodrigues(rvec)
-    T = np.eye(4)
-    T[:3, :3] = R
-    T[:3, 3] = tvec.flatten()
-
-    R = torch.from_numpy(R).float().to(device=kpts0.device)
-    t = torch.from_numpy(tvec.flatten()).float().to(device=kpts0.device)
-    return Pose.from_Rt(R, t)
+    return T_list
 
 
 

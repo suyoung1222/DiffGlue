@@ -5,7 +5,7 @@ from .diffglue_pipeline import DiffGluePipeline
 
 from pathlib import Path
 from omegaconf import OmegaConf
-
+import pdb
 
 def computeNN(desc_ii, desc_jj):
     desc_ii, desc_jj = desc_ii.squeeze(0).transpose(0,1), desc_jj.squeeze(0).transpose(0,1)
@@ -32,10 +32,11 @@ class Matching(torch.nn.Module):
         self.diffglue = DiffGluePipeline(default_conf).eval().cuda()  # load the matcher
 
         print('Loaded DiffGlue model')
-        exper = Path("./models/weights/SP_DiffGlue.tar")
+        # exper = Path("./models/weights/SP_DiffGlue.tar")
+        exper = Path("/project/pi_hzhang2_umass_edu/suyoungkang_umass_edu/diffglue_data/outputs/training/SP+DiffGlue_megadepth/checkpoint_best.tar")
         ckpt = exper
         ckpt = torch.load(str(ckpt), map_location="cpu")
-
+        # pdb.set_trace()
         state_dict = ckpt["model"]
         dict_params = set(state_dict.keys())
         model_params = set(map(lambda n: n[0], self.diffglue.named_parameters()))
@@ -48,7 +49,6 @@ class Matching(torch.nn.Module):
     def forward(self, data):
         """ Run SuperPoint and DiffGlue """
         pred = {}
-
         # Extract SuperPoint (keypoints, scores, descriptors) if not provided
         if 'keypoints0' not in data:
             pred0 = self.superpoint({'image': data['image0']})
