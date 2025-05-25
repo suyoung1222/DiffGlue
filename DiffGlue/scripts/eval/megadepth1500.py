@@ -174,10 +174,10 @@ class MegaDepth1500Pipeline(EvalPipeline):
             )
         }
 
-        if "Esti_T_0to1" in pred:
-            print("######Estimated Pose: ", pred["Esti_T_0to1"])
-        else:
-            print("###### no Esti!!!!")
+        # if "Esti_T_0to1" in pred:
+        #     print("######Estimated Pose: ", pred["Esti_T_0to1"])
+        # else:
+        #     print("###### no Esti!!!!")
 
         return summaries, figures, results
 

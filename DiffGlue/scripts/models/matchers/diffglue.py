@@ -385,7 +385,7 @@ class MatchAssignment(nn.Module):
         return torch.sigmoid(self.matchability(desc)).squeeze(-1)
 
 
-def filter_matches(scores: torch.Tensor, th: float): # TODO: is this threshold is different from ransac? 
+def filter_matches(scores: torch.Tensor, th: float): # TODO: how is this threshold is different from ransac? 
     """obtain matches from a log assignment matrix [Bx M+1 x N+1]"""
     max0, max1 = scores[:, :-1, :-1].max(2), scores[:, :-1, :-1].max(1)
     m0, m1 = max0.indices, max1.indices
@@ -425,8 +425,8 @@ class DiffGlue(nn.Module):
         },
     }
 
-    # required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1"] 
-    required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1", "T_0to1"] 
+    required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1"] 
+    # required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1", "T_0to1"] 
 
     def __init__(self, conf) -> None:
         super().__init__()
@@ -579,15 +579,15 @@ class DiffGlue(nn.Module):
         adj_mat[...,-1,:-1] = (adj_mat[...,-1,:-1].exp()-0.5)*self.conf.scale
 
         ### TODO: Relative Pose Estimation (PnP vs W/o depth)
-        if "depth" in data['view0']:
-            Esti_T_0to1 = solve_pnp_ransac(data["keypoints0"],
-                                            data["keypoints1"],
-                                            m0,
-                                            data['view0']['camera'],
-                                            data['view1']['camera'],
-                                            data['view0']['depth']) # kpts0, kpts1, matches0, cam0, cam1, depth0
-        else:
-            Esti_T_0to1 = None
+        # if "depth" in data['view0']:
+        #     Esti_T_0to1 = solve_pnp_ransac(data["keypoints0"],
+        #                                     data["keypoints1"],
+        #                                     m0,
+        #                                     data['view0']['camera'],
+        #                                     data['view1']['camera'],
+        #                                     data['view0']['depth']) # kpts0, kpts1, matches0, cam0, cam1, depth0
+        # else:
+        #     Esti_T_0to1 = None
 
         pred = {
             "matches0": m0,
@@ -598,7 +598,7 @@ class DiffGlue(nn.Module):
             "ref_descriptors1": torch.stack(all_desc1, 1),
             "log_assignment": scores,
             "adj_mat": adj_mat,
-            "Esti_T_0to1": Esti_T_0to1
+            # "Esti_T_0to1": Esti_T_0to1
         }
 
         return pred
