@@ -49,6 +49,8 @@ model:
         checkpointed: true
         n_layers: 9
         scale: 2
+        epipolar: disabled
+        epi_weight: 0.0
 train:
     seed: 0
     epochs: 40

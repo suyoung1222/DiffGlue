@@ -662,7 +662,7 @@ class DiffGlue(nn.Module):
         losses["matcher_total"] /= sum_weights
         # confidences
         if self.training:
-            losses["matcher_total"] = losses["matcher_total"] + losses["confidence"] + losses["geometry"] # TODO: lambda??weight??
+            losses["matcher_total"] = losses["matcher_total"] + losses["confidence"] + self.conf.epi_weight * losses["geometry"] # TODO: lambda??weight??
 
         if not self.training:
             # add metrics

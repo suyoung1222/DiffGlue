@@ -1,0 +1,127 @@
+Removing conda version miniforge3-24.7.1
+Loading conda version miniforge3-24.7.1
+Removing cuda version 12.1
+Loading cuda version 12.1
+[06/07/2025 22:51:51 scripts INFO] Starting experiment SP+DiffGlue_homography_scratch
+[06/07/2025 22:51:58 scripts INFO] Using device cuda
+[06/07/2025 22:52:08 scripts.datasets.base_dataset INFO] Creating dataset HomographyDataset
+[06/07/2025 22:52:08 scripts.datasets.homographies INFO] No image list provided. Searching for images in /project/pi_hzhang2_umass_edu/suyoungkang_umass_edu/diffglue_data/data/revisitop1m/jpg.
+[06/07/2025 22:58:38 scripts.datasets.homographies INFO] Found 306149 images in folder.
+/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/site-packages/torch/utils/data/dataloader.py:560: UserWarning: This DataLoader will create 16 worker processes in total. Our suggested max number of worker in current system is 12, which is smaller than what this DataLoader is going to create. Please be aware that excessive worker creation might get DataLoader running slow or even freeze, lower the worker number to avoid potential slowness/freeze if necessary.
+  warnings.warn(_create_warning_msg(
+[06/07/2025 22:58:38 scripts INFO] Training loader has 2343 batches
+[06/07/2025 22:58:38 scripts INFO] Validation loader has 32 batches
+[06/07/2025 22:58:42 scripts INFO] Parameters with scaled learning rate:
+{}
+[06/07/2025 22:58:42 scripts INFO] Training with mixed_precision=None
+[06/07/2025 22:58:42 scripts INFO] Starting training with configuration:
+data:
+  name: homographies
+  data_dir: revisitop1m
+  train_size: 150000
+  val_size: 2000
+  batch_size: 64
+  num_workers: 16
+  homography:
+    difficulty: 0.7
+    max_angle: 45
+  photometric:
+    name: lg
+model:
+  name: two_view_pipeline
+  run_gt_in_forward: true
+  extractor:
+    name: extractors.superpoint
+    max_num_keypoints: 512
+    force_num_keypoints: true
+    detection_threshold: 0.0
+    nms_radius: 3
+    trainable: false
+  ground_truth:
+    name: matchers.homography_matcher
+    th_positive: 3
+    th_negative: 3
+  diffuser:
+    name: diffusers.diffuser
+    steps: 4096
+    learn_sigma: false
+    sigma_small: false
+    noise_schedule: linear
+    use_kl: false
+    predict_xstart: true
+    rescale_timesteps: true
+    rescale_learned_sigmas: true
+    timestep_respacing: ''
+    ddim_steps: 2
+    schedule_sampler: uniform
+    use_ddim: true
+    clip_denoised: true
+    diffuser_loss_weight: 1000
+    scale: 2
+  matcher:
+    name: matchers.diffglue
+    filter_threshold: 0.1
+    flash: false
+    checkpointed: true
+    n_layers: 9
+    scale: 2
+    epipolar: disabled
+    epi_weight: 0.0
+train:
+  seed: 0
+  epochs: 40
+  optimizer: adam
+  opt_regexp: null
+  optimizer_options: {}
+  lr: 0.0001
+  lr_schedule:
+    type: factor
+    start: 20
+    exp_div_10: 0
+    on_epoch: true
+    factor: 0.8
+    options: {}
+  lr_scaling:
+  - - 100
+    - - dampingnet.const
+  eval_every_iter: 500
+  save_every_iter: 500
+  log_every_iter: 100
+  log_grad_every_iter: null
+  test_every_epoch: 1
+  keep_last_checkpoints: 10
+  load_experiment: null
+  median_metrics: []
+  recall_metrics: {}
+  pr_metrics: {}
+  best_key: loss/total
+  dataset_callback_fn: null
+  dataset_callback_on_val: false
+  clip_grad: null
+  pr_curves: {}
+  plot: null
+  submodules: []
+benchmarks:
+  hpatches:
+    eval:
+      estimator: opencv
+      ransac_th: 0.5
+
+[06/07/2025 22:58:42 scripts INFO] Starting epoch 0
+  0%|          | 0/2343 [00:00<?, ?it/s]  0%|          | 0/2343 [02:32<?, ?it/s]
+Traceback (most recent call last):
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 683, in <module>
+    main_worker(0, conf, output_dir, args)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 620, in main_worker
+    training(rank, conf, output_dir, args)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 479, in training
+    losses[k] = torch.mean(losses[k], -1)
+TypeError: mean() received an invalid combination of arguments - got (float, int), but expected one of:
+ * (Tensor input, *, torch.dtype dtype)
+ * (Tensor input, tuple of ints dim, bool keepdim, *, torch.dtype dtype, Tensor out)
+ * (Tensor input, tuple of names dim, bool keepdim, *, torch.dtype dtype, Tensor out)
+

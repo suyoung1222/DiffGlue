@@ -28,7 +28,7 @@ class MegaDepth1500Pipeline(EvalPipeline):
     default_conf = {
         "data": {
             "name": "image_pairs",
-            "pairs": "megadepth1500/pairs_calibrated.txt",
+            "pairs": "megadepth1500/pairs_calibrated_occ_quat.txt",
             "root": "megadepth1500/images/",
             "extra_data": "relative_pose",
             "preprocessing": {

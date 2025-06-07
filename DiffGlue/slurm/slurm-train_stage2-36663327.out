@@ -1,0 +1,23 @@
+Loading conda version miniforge3-24.7.1
+Loading cuda version 12.1
+[05/28/2025 20:27:09 scripts INFO] Starting experiment SP+DiffGlue_megadepth_sampson_0.2weight
+[05/28/2025 20:27:16 scripts INFO] Restoring from previous training of SP+DiffGlue_megadepth_sampson_0.2weight
+[05/28/2025 20:27:16 scripts INFO] Restoring from checkpoint checkpoint_best.tar
+Traceback (most recent call last):
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 683, in <module>
+    main_worker(0, conf, output_dir, args)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 620, in main_worker
+    training(rank, conf, output_dir, args)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 192, in training
+    init_cp = torch.load(str(init_cp), map_location="cpu")
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/site-packages/torch/serialization.py", line 791, in load
+    with _open_file_like(f, 'rb') as opened_file:
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/site-packages/torch/serialization.py", line 271, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/diffglue/lib/python3.9/site-packages/torch/serialization.py", line 252, in __init__
+    super().__init__(open(name, mode))
+FileNotFoundError: [Errno 2] No such file or directory: '/project/pi_hzhang2_umass_edu/suyoungkang_umass_edu/diffglue_data/outputs/training/SP+DiffGlue_megadepth_sampson_0.2weight/checkpoint_best.tar'
