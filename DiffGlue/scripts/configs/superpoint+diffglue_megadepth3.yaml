@@ -38,7 +38,7 @@ model:
         n_layers: 9
         scale: 2
         epipolar: enabled
-        epi_weight: 1.5
+        epi_weight: 1e3
     ground_truth:
         name: matchers.depth_matcher
         th_positive: 3

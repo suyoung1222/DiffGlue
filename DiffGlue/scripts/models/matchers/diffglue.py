@@ -655,7 +655,7 @@ class DiffGlue(nn.Module):
                     data['view1']['camera'],
                     weight=0.1  # or some tunable value
                 ) # kpts0, kpts1, matches0, T0to1, cam0, cam1, weight=1.0
-                losses["geometry"] = L_epi
+                losses["geometry"] = L_epi * self.conf.epi_weight
             else:
                 losses["geometry"] = 0.0
 
