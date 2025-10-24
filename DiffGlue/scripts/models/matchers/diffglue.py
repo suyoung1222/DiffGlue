@@ -1,7 +1,7 @@
 import warnings
 from pathlib import Path
 from typing import Callable, List, Optional
-
+import pdb
 import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
@@ -403,6 +403,111 @@ def filter_matches(scores: torch.Tensor, th: float): # TODO: how is this thresho
     m1 = torch.where(valid1, m1, -1)
     return m0, m1, mscores0, mscores1
 
+# class LoFTR_KEYPOINT(nn.Module):
+#     def __init__(self, config):
+#         super().__init__()
+#         # Misc
+#         self.config = config
+
+#         # Modules
+#         self.backbone = build_backbone(config)
+#         self.pos_encoding = PositionEncodingSine(
+#             config['coarse']['d_model'],
+#             temp_bug_fix=config['coarse']['temp_bug_fix'])
+#         self.loftr_coarse = LocalFeatureTransformer(config['coarse'])
+
+#     def forward(self, data):
+#         """ 
+#         Update:
+#             data (dict): {
+#                 'image0': (torch.Tensor): (N, 1, H, W)
+#                 'image1': (torch.Tensor): (N, 1, H, W)
+#                 'mask0'(optional) : (torch.Tensor): (N, H, W) '0' indicates a padded position
+#                 'mask1'(optional) : (torch.Tensor): (N, H, W)
+#             }
+#         """
+#         # 1. Local Feature CNN
+#         data.update({
+#             'bs': data['image0'].size(0),
+#             'hw0_i': data['image0'].shape[2:], 'hw1_i': data['image1'].shape[2:]
+#         })
+
+#         if data['hw0_i'] == data['hw1_i']:  # faster & better BN convergence
+#             # TODO: backbone 은 그저 resnet 
+#             feats_c, feats_f = self.backbone(torch.cat([data['image0'], data['image1']], dim=0))
+#             (feat_c0, feat_c1), (feat_f0, feat_f1) = feats_c.split(data['bs']), feats_f.split(data['bs'])
+#         else:  # handle different input shapes
+#             (feat_c0, feat_f0), (feat_c1, feat_f1) = self.backbone(data['image0']), self.backbone(data['image1'])
+
+#         data.update({
+#             'hw0_c': feat_c0.shape[2:], 'hw1_c': feat_c1.shape[2:],
+#             'hw0_f': feat_f0.shape[2:], 'hw1_f': feat_f1.shape[2:]
+#         })
+
+
+def soft_topk_coordinates(heat, K, temperature=0.25):
+    """
+    heat: [B,1,h,w] logits. Returns soft K points per image:
+      coords: [B,K,2] in normalized [-1,1] grid coords
+      probs:  [B,K]   soft point masses
+    Strategy: iterate K times with a softmax + masking (straight-through style).
+    """
+    B, _, h, w = heat.shape
+    heat_flat = heat.view(B, 1, -1)                        # [B,1,N]
+    coords_xy = torch.stack(torch.meshgrid(
+        torch.linspace(-1,1,h,device=heat.device),
+        torch.linspace(-1,1,w,device=heat.device),
+        indexing='ij'), dim=-1).view(1, -1, 2)             # [1,N,2]
+
+    selected_coords, selected_probs = [], []
+    mask = torch.zeros_like(heat_flat)
+
+    for _ in range(K):
+        logits = (heat_flat - mask) / temperature          # [B,1,N]
+        prob   = F.softmax(logits, dim=-1)                 # [B,1,N]
+        xy     = torch.einsum('bcn,bnd->bcd', prob, coords_xy)  # [B,1,2]
+        selected_coords.append(xy.squeeze(1))              # [B,2]
+        selected_probs.append(prob.max(dim=-1).values.squeeze(1))  # [B]
+        # mask out this peak softly
+        mask = mask + prob.detach() * 10.0                 # increase “cost” at chosen area
+
+    coords = torch.stack(selected_coords, dim=1)           # [B,K,2]
+    probs  = torch.stack(selected_probs,  dim=1)           # [B,K]
+    return coords, probs
+
+def sample_descriptors(desc_map, coords, patch_size=1):
+    """
+    desc_map: [B,D,h,w], coords: [B,K,2] in [-1,1].
+    Returns descriptors [B,K,D] via bilinear sampling (optionally average small patches).
+    """
+    B, D, h, w = desc_map.shape
+    K = coords.shape[1]
+    grid = coords.view(B, K, 1, 2)  # [B,K,1,2]
+    sampled = F.grid_sample(desc_map, grid, align_corners=True)  # [B,D,K,1]
+    descs = sampled.squeeze(-1).permute(0,2,1).contiguous()      # [B,K,D]
+    return F.normalize(descs, dim=-1)
+
+
+class ImageToKeypointsAndDescriptors(nn.Module):
+    def __init__(self, desc_dim=256, K=2048):
+        super().__init__()
+        self.K = K
+        self.enc = nn.Sequential(
+            nn.Conv2d(3, 32, 3, 2, 1), nn.ReLU(),
+            nn.Conv2d(32, 64, 3, 2, 1), nn.ReLU(),
+            nn.Conv2d(64, 128, 3, 2, 1), nn.ReLU(),
+            nn.Conv2d(128, 128, 3, 1, 1), nn.ReLU()
+        )
+        self.heatmap_head = nn.Conv2d(128, 1, 1)
+        self.desc_head = nn.Conv2d(128, desc_dim, 1)
+
+    def forward(self, img):
+        feat = self.enc(img)
+        heat = self.heatmap_head(feat)
+        desc_map = F.normalize(self.desc_head(feat), dim=1)
+        coords, kp_conf = soft_topk_coordinates(heat, K=self.K)
+        descs = sample_descriptors(desc_map, coords)
+        return coords, descs, kp_conf
 
 class DiffGlue(nn.Module):
     default_conf = {
@@ -443,6 +548,9 @@ class DiffGlue(nn.Module):
             self.input_proj = nn.Linear(conf.input_dim, conf.descriptor_dim, bias=True)
         else:
             self.input_proj = nn.Identity()
+            
+        # local keypoint encoder
+        self.keypoint_encoder = ImageToKeypointsAndDescriptors()
 
         head_dim = conf.descriptor_dim // conf.num_heads
         self.posenc = LearnableFourierPositionalEncoding(
@@ -505,16 +613,31 @@ class DiffGlue(nn.Module):
 
         for key in self.required_data_keys:
             assert key in data, f"Missing key {key} in data"
+            
+        # # Off the shelf (superpoint)
+        # kpts0, kpts1 = data["keypoints0"], data["keypoints1"]
+        # desc0 = data["descriptors0"].contiguous()
+        # desc1 = data["descriptors1"].contiguous()
+        # print("desc0:", desc0.shape, 'kpts0:', kpts0.shape) 
+        #detector free
+        # pdb.set_trace()
+        kpts0, desc0, conf0 = self.keypoint_encoder(data['view0']['image'])
+        kpts1, desc1, conf1 = self.keypoint_encoder(data['view1']['image'])
+        mconf0 = conf0.unsqueeze(-1)
+        mconf1 = conf1.unsqueeze(-1)
+        data['keypoints0'] = kpts0
+        data['keypoints1'] = kpts1
+        data['descriptors0'] = desc0
+        data['descriptors1'] = desc1
 
-        kpts0, kpts1 = data["keypoints0"], data["keypoints1"]
         b, m, _ = kpts0.shape
         b, n, _ = kpts1.shape
         device = kpts0.device
         if "view0" in data.keys() and "view1" in data.keys():
             size0 = data["view0"].get("image_size")
             size1 = data["view1"].get("image_size")
-        kpts0 = normalize_keypoints(kpts0, size0).clone()
-        kpts1 = normalize_keypoints(kpts1, size1).clone()
+        # kpts0 = normalize_keypoints(kpts0, size0).clone()
+        # kpts1 = normalize_keypoints(kpts1, size1).clone()
 
         if self.conf.add_scale_ori:
             sc0, o0 = data["scales0"], data["oris0"]
@@ -536,8 +659,6 @@ class DiffGlue(nn.Module):
                 -1,
             )
 
-        desc0 = data["descriptors0"].contiguous()
-        desc1 = data["descriptors1"].contiguous()
 
         assert desc0.shape[-1] == self.conf.input_dim
         assert desc1.shape[-1] == self.conf.input_dim
@@ -598,6 +719,12 @@ class DiffGlue(nn.Module):
             "ref_descriptors1": torch.stack(all_desc1, 1),
             "log_assignment": scores,
             "adj_mat": adj_mat,
+            "keypoints0": kpts0,
+            "keypoints1": kpts1,
+            "descriptors0": desc0,
+            "descriptors1": desc1,
+            "keypoint_scores0": mconf0,
+            "keypoint_scores1": mconf1,
             # "Esti_T_0to1": Esti_T_0to1
         }
 
@@ -653,16 +780,16 @@ class DiffGlue(nn.Module):
                     data["T_0to1"],
                     data['view0']['camera'],
                     data['view1']['camera'],
-                    weight=0.1  # or some tunable value
+                    weight=1.0  # or some tunable value
                 ) # kpts0, kpts1, matches0, T0to1, cam0, cam1, weight=1.0
-                losses["geometry"] = L_epi * self.conf.epi_weight
+                losses["geometry"] = L_epi # * self.conf.epi_weight
             else:
                 losses["geometry"] = 0.0
 
         losses["matcher_total"] /= sum_weights
         # confidences
         if self.training:
-            losses["matcher_total"] = losses["matcher_total"] + losses["confidence"] + self.conf.epi_weight * losses["geometry"] # TODO: lambda??weight??
+            losses["matcher_total"] = losses["matcher_total"]*self.conf.matcher_loss_weight + losses["confidence"] + self.conf.epi_weight * losses["geometry"] # TODO: lambda??weight??
 
         if not self.training:
             # add metrics

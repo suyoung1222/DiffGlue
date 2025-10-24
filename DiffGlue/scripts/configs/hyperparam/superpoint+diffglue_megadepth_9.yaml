@@ -38,8 +38,8 @@ model:
         n_layers: 9
         scale: 2
         epipolar: enabled
-        epi_weight: 1.0
-        matcher_loss_weight: 0.1
+        epi_weight: 0.1
+        matcher_loss_weight: 1.0
     ground_truth:
         name: matchers.depth_matcher
         th_positive: 3

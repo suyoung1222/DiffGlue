@@ -55,7 +55,7 @@ from torch import nn
 
 from ..base_model import BaseModel
 from ..utils.misc import pad_and_stack
-
+import pdb
 
 def simple_nms(scores, radius):
     """Perform non maximum suppression on the heatmap using max-pooling.
@@ -201,6 +201,7 @@ class SuperPoint(BaseModel):
 
     def _forward(self, data):
         image = data["image"]
+        pdb.set_trace()
         if image.shape[1] == 3:  # RGB
             scale = image.new_tensor([0.299, 0.587, 0.114]).view(1, 3, 1, 1)
             image = (image * scale).sum(1, keepdim=True)
@@ -347,6 +348,7 @@ class SuperPoint(BaseModel):
             if self.conf.dense_outputs:
                 pred["dense_descriptors"] = dense_desc
 
+        pdb.set_trace()
         return pred
 
     def loss(self, pred, data):

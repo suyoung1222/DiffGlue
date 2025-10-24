@@ -5,16 +5,16 @@
         "name": "Debug DiffGlue Training",
         "type": "python",
         "request": "launch",
-        "module": "scripts.eval.megadepth1500", //"scripts.train_deb",
+        "module": "scripts.train", //"scripts.eval.megadepth1500", //"scripts.train_deb",
         "args": [
           // Training
-          // "SP+DiffGlue_megadepth",
-          // "--conf", "scripts/configs/superpoint+diffglue_megadepth.yaml",
-          // "train.load_experiment=SP+DiffGlue_homography",
-          // "data.load_features.do=True"
+          "SP+DiffGlue_megadepth",
+          "--conf", "scripts/configs/superpoint+diffglue_megadepth_e1.yaml",
+          "train.load_experiment=SP+DiffGlue_homography",
+          "data.load_features.do=True"
           // Testing
-          "--conf", "superpoint+diffglue-official",
-          "--checkpoint", "/project/pi_hzhang2_umass_edu/suyoungkang_umass_edu/diffglue_data/outputs/training/SP+DiffGlue_megadepth/checkpoint_best.tar"
+          // "--conf", "superpoint+diffglue-official",
+          // "--checkpoint", "/project/pi_hzhang2_umass_edu/suyoungkang_umass_edu/diffglue_data/outputs/training/SP+DiffGlue_megadepth/checkpoint_best.tar"
         ],
         "justMyCode": false,
         "console": "integratedTerminal",
