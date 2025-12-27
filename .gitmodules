@@ -1,0 +1,3 @@
+[submodule "DiffGlue/scripts/models/matchers/LoFTR"]
+	path = DiffGlue/scripts/models/matchers/LoFTR
+	url = https://github.com/suyoung1222/LoFTR.git
