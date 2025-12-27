@@ -7,7 +7,11 @@
         "request": "launch",
         "module": "scripts.train", //"scripts.eval.megadepth1500", //"scripts.train_deb",
         "args": [
-          // Training
+          // Traqining stage1
+          // "SP+DiffGlue_homography", 
+          // "--conf", "scripts/configs/superpoint+diffglue_homography.yaml", 
+          // "--run_benchmarks",
+          // Training stage2
           "SP+DiffGlue_megadepth",
           "--conf", "scripts/configs/superpoint+diffglue_megadepth_e1.yaml",
           "train.load_experiment=SP+DiffGlue_homography",

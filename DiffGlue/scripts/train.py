@@ -9,6 +9,7 @@ import signal
 from collections import defaultdict
 from pathlib import Path
 from pydoc import locate
+import pdb
 
 import numpy as np
 import torch
@@ -669,7 +670,9 @@ if __name__ == "__main__":
     # copy scripts and submodule into output dir
     for module in conf.train.get("submodules", []) + [__module_name__]:
         mod_dir = Path(__import__(str(module)).__file__).parent
-        shutil.copytree(mod_dir, output_dir / module, dirs_exist_ok=True)
+        ignore = shutil.ignore_patterns(".git", ".git/*", "__pycache__", "data", "data/*")
+        shutil.copytree(mod_dir, output_dir / module, dirs_exist_ok=True, ignore=ignore)
+        
 
     if args.distributed:
         args.n_gpus = torch.cuda.device_count()

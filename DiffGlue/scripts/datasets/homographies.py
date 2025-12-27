@@ -49,7 +49,7 @@ class HomographyDataset(BaseDataset):
         # image search
         "data_dir": "revisitop1m",  # the top-level directory
         "image_dir": "jpg/",  # the subdirectory with the images
-        "image_list": None, #"revisitop1m.txt",  # optional: list or filename of list
+        "image_list": "revisitop1m.txt",  # optional: list or filename of list
         "glob": ["*.jpg", "*.png", "*.jpeg", "*.JPG", "*.PNG"],
         # splits
         "train_size": 100,

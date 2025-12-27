@@ -107,8 +107,8 @@ class MegaDepth1500Pipeline(EvalPipeline):
         cache_loader = CacheLoader({"path": str(pred_file), "collate": None}).eval()
         # pdb.set_trace()
         for i, data in enumerate(tqdm(loader)):
-            pred = cache_loader(data)
-            # add custom evaluations here
+            pred = (data)
+            # add custom evacache_loaderluations here
             results_i = eval_matches_epipolar(data, pred)
             for th in test_thresholds:
                 pose_results_i = eval_relative_pose_robust(

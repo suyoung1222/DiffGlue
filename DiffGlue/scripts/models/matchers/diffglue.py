@@ -13,6 +13,15 @@ from ..utils.losses import NLLLoss
 from ..utils.metrics import matcher_metrics
 from ..utils.net import timestep_embedding
 from ..utils.pose_utils import epipolar_loss, solve_pnp_ransac, sampson_epipolar_loss
+from ..utils.local_feature import dense_positions_and_descriptors, upsample_coords_to_image, select_topk_from_dense
+
+from .LoFTR.src.loftr import default_cfg
+from .LoFTR.src.loftr.backbone import build_backbone
+from .LoFTR.src.loftr.utils.position_encoding import PositionEncodingSine
+from .LoFTR.src.loftr.utils.coarse_matching import CoarseMatching
+from .LoFTR.src.loftr.loftr_module import LocalFeatureTransformer
+from einops.einops import rearrange
+import pdb
 
 FLASH_AVAILABLE = hasattr(F, "scaled_dot_product_attention")
 
@@ -444,72 +453,98 @@ def filter_matches(scores: torch.Tensor, th: float): # TODO: how is this thresho
 #             'hw0_f': feat_f0.shape[2:], 'hw1_f': feat_f1.shape[2:]
 #         })
 
+# class ImageToKeypointsAndDescriptors(nn.Module):
+#     def __init__(self, desc_dim=256, K=2048):
+#         super().__init__()
+#         self.K = K
+#         self.enc = nn.Sequential(
+#             nn.Conv2d(3, 32, 3, 2, 1), nn.ReLU(),
+#             nn.Conv2d(32, 64, 3, 2, 1), nn.ReLU(),
+#             nn.Conv2d(64, 128, 3, 2, 1), nn.ReLU(),
+#             nn.Conv2d(128, 128, 3, 1, 1), nn.ReLU()
+#         )
+#         self.heatmap_head = nn.Conv2d(128, 1, 1)
+#         self.desc_head = nn.Conv2d(128, desc_dim, 1)
 
-def soft_topk_coordinates(heat, K, temperature=0.25):
-    """
-    heat: [B,1,h,w] logits. Returns soft K points per image:
-      coords: [B,K,2] in normalized [-1,1] grid coords
-      probs:  [B,K]   soft point masses
-    Strategy: iterate K times with a softmax + masking (straight-through style).
-    """
-    B, _, h, w = heat.shape
-    heat_flat = heat.view(B, 1, -1)                        # [B,1,N]
-    coords_xy = torch.stack(torch.meshgrid(
-        torch.linspace(-1,1,h,device=heat.device),
-        torch.linspace(-1,1,w,device=heat.device),
-        indexing='ij'), dim=-1).view(1, -1, 2)             # [1,N,2]
+#     def forward(self, img):
+#         feat = self.enc(img)
+#         heat = self.heatmap_head(feat)
+#         desc_map = F.normalize(self.desc_head(feat), dim=1)
+#         coords, kp_conf = soft_topk_coordinates(heat, K=self.K)
+#         descs = sample_descriptors(desc_map, coords)
+#         return coords, descs, kp_conf
 
-    selected_coords, selected_probs = [], []
-    mask = torch.zeros_like(heat_flat)
-
-    for _ in range(K):
-        logits = (heat_flat - mask) / temperature          # [B,1,N]
-        prob   = F.softmax(logits, dim=-1)                 # [B,1,N]
-        xy     = torch.einsum('bcn,bnd->bcd', prob, coords_xy)  # [B,1,2]
-        selected_coords.append(xy.squeeze(1))              # [B,2]
-        selected_probs.append(prob.max(dim=-1).values.squeeze(1))  # [B]
-        # mask out this peak softly
-        mask = mask + prob.detach() * 10.0                 # increase “cost” at chosen area
-
-    coords = torch.stack(selected_coords, dim=1)           # [B,K,2]
-    probs  = torch.stack(selected_probs,  dim=1)           # [B,K]
-    return coords, probs
-
-def sample_descriptors(desc_map, coords, patch_size=1):
-    """
-    desc_map: [B,D,h,w], coords: [B,K,2] in [-1,1].
-    Returns descriptors [B,K,D] via bilinear sampling (optionally average small patches).
-    """
-    B, D, h, w = desc_map.shape
-    K = coords.shape[1]
-    grid = coords.view(B, K, 1, 2)  # [B,K,1,2]
-    sampled = F.grid_sample(desc_map, grid, align_corners=True)  # [B,D,K,1]
-    descs = sampled.squeeze(-1).permute(0,2,1).contiguous()      # [B,K,D]
-    return F.normalize(descs, dim=-1)
-
-
-class ImageToKeypointsAndDescriptors(nn.Module):
-    def __init__(self, desc_dim=256, K=2048):
+class ResidualBlock(nn.Module):
+    def __init__(self, ch):
         super().__init__()
-        self.K = K
-        self.enc = nn.Sequential(
-            nn.Conv2d(3, 32, 3, 2, 1), nn.ReLU(),
-            nn.Conv2d(32, 64, 3, 2, 1), nn.ReLU(),
-            nn.Conv2d(64, 128, 3, 2, 1), nn.ReLU(),
-            nn.Conv2d(128, 128, 3, 1, 1), nn.ReLU()
+        self.conv1 = nn.Conv2d(ch, ch, 3, 1, 1, bias=False)
+        self.bn1   = nn.BatchNorm2d(ch)
+        self.conv2 = nn.Conv2d(ch, ch, 3, 1, 1, bias=False)
+        self.bn2   = nn.BatchNorm2d(ch)
+        self.relu  = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        identity = x
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out = out + identity
+        return self.relu(out)
+
+
+class LocalFeatureEncoder(nn.Module):
+    """
+    Simple local feature encoder:
+
+      Input:  [B,3,H,W]  (RGB image)
+      Output: feat_coarse: [B, C, H/8, W/8]  (L2-normalized along channel)
+
+    You can set C via `desc_dim`. This will be the descriptor dimension
+    you feed into your matcher.
+    """
+    def __init__(self, desc_dim=256):
+        super().__init__()
+        self.desc_dim = desc_dim
+
+        # Stem: downsample to 1/2
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False),  # /2
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
         )
-        self.heatmap_head = nn.Conv2d(128, 1, 1)
-        self.desc_head = nn.Conv2d(128, desc_dim, 1)
+
+        # Downsample to 1/4
+        self.layer1 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1, bias=False),  # /4
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            ResidualBlock(128),
+        )
+
+        # Downsample to 1/8
+        self.layer2 = nn.Sequential(
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1, bias=False),  # /8
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            ResidualBlock(256),
+        )
+
+        # Project to descriptor dimension
+        self.head = nn.Conv2d(256, desc_dim, kernel_size=1, bias=True)
 
     def forward(self, img):
-        feat = self.enc(img)
-        heat = self.heatmap_head(feat)
-        desc_map = F.normalize(self.desc_head(feat), dim=1)
-        coords, kp_conf = soft_topk_coordinates(heat, K=self.K)
-        descs = sample_descriptors(desc_map, coords)
-        return coords, descs, kp_conf
+        """
+        img: [B,3,H,W]
+        returns:
+            feat_coarse: [B, desc_dim, H/8, W/8]  (L2-normalized)
+        """
+        x = self.stem(img)
+        x = self.layer1(x)
+        x = self.layer2(x)          # [B,256,H/8,W/8]
+        feat = self.head(x)         # [B,desc_dim,H/8,W/8]
+        feat = F.normalize(feat, dim=1)  # normalize descriptors per location
+        return feat
 
-class DiffGlue(nn.Module):
+class DiffGlue_old(nn.Module):
     default_conf = {
         "name": "diffglue",  # just for interfacing
         "input_dim": 256,  # input descriptor dimension (autoselected from weights)
@@ -530,7 +565,8 @@ class DiffGlue(nn.Module):
         },
     }
 
-    required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1"] 
+    required_data_keys = ["view0", "view1"]
+    # required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1"] 
     # required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1", "T_0to1"] 
 
     def __init__(self, conf) -> None:
@@ -550,7 +586,9 @@ class DiffGlue(nn.Module):
             self.input_proj = nn.Identity()
             
         # local keypoint encoder
-        self.keypoint_encoder = ImageToKeypointsAndDescriptors()
+        self.keypoint_encoder = LocalFeatureEncoder(
+            desc_dim=conf.input_dim
+        )
 
         head_dim = conf.descriptor_dim // conf.num_heads
         self.posenc = LearnableFourierPositionalEncoding(
@@ -615,24 +653,45 @@ class DiffGlue(nn.Module):
             assert key in data, f"Missing key {key} in data"
             
         # # Off the shelf (superpoint)
-        # kpts0, kpts1 = data["keypoints0"], data["keypoints1"]
-        # desc0 = data["descriptors0"].contiguous()
-        # desc1 = data["descriptors1"].contiguous()
-        # print("desc0:", desc0.shape, 'kpts0:', kpts0.shape) 
-        #detector free
+        # kpts0_old, kpts1_old = data["keypoints0"], data["keypoints1"]
+        # desc0_old = data["descriptors0"].contiguous()
+        # desc1_old = data["descriptors1"].contiguous()
+        # print("desc0:", desc0_old.shape, 'kpts0:', kpts0_old.shape) 
+        
+        # # detector free
         # pdb.set_trace()
-        kpts0, desc0, conf0 = self.keypoint_encoder(data['view0']['image'])
-        kpts1, desc1, conf1 = self.keypoint_encoder(data['view1']['image'])
-        mconf0 = conf0.unsqueeze(-1)
-        mconf1 = conf1.unsqueeze(-1)
+        # kpts0, desc0, conf0 = self.keypoint_encoder(data['view0']['image'])
+        # kpts1, desc1, conf1 = self.keypoint_encoder(data['view1']['image'])
+        for key in self.required_data_keys:
+            assert key in data, f"Missing key {key} in data"
+            assert "image" in data[key], f"Missing 'image' in data['{key}']"
+
+        img0 = data["view0"]["image"]  # [B,3,H,W]
+        img1 = data["view1"]["image"]
+        feat0 = self.keypoint_encoder(img0)  # [B,C,H/8,W/8]
+        feat1 = self.keypoint_encoder(img1)
+        coords0_coarse, desc0 = dense_positions_and_descriptors(feat0)  # [B,N,2], [B,N,C]
+        coords1_coarse, desc1 = dense_positions_and_descriptors(feat1)
+        coords0_img = upsample_coords_to_image(coords0_coarse, downsample=8)  # [B,N,2]
+        coords1_img = upsample_coords_to_image(coords1_coarse, downsample=8)
+        kpts0 = coords0_img
+        kpts1 = coords1_img
+        # mconf0 = conf0.unsqueeze(-1)
+        # mconf1 = conf1.unsqueeze(-1)
+        
+        K = 2048
+        kpts0, desc0, score0 = select_topk_from_dense(coords0_img, desc0, K)
+        kpts1, desc1, score1 = select_topk_from_dense(coords1_img, desc1, K)
+        b, m, _ = kpts0.shape
+        b, n, _ = kpts1.shape
+        mconf0 = score0.unsqueeze(-1)   # [B,K,1]
+        mconf1 = score1.unsqueeze(-1)
         data['keypoints0'] = kpts0
         data['keypoints1'] = kpts1
         data['descriptors0'] = desc0
         data['descriptors1'] = desc1
-
-        b, m, _ = kpts0.shape
-        b, n, _ = kpts1.shape
         device = kpts0.device
+        
         if "view0" in data.keys() and "view1" in data.keys():
             size0 = data["view0"].get("image_size")
             size1 = data["view1"].get("image_size")
@@ -798,6 +857,321 @@ class DiffGlue(nn.Module):
             metrics = {}
         return losses, metrics
     
+class DiffGlue(nn.Module):
+    default_conf = {
+        "name": "diffglue",  # just for interfacing
+        "input_dim": 256,  # input descriptor dimension (autoselected from weights)
+        "add_scale_ori": False,
+        "descriptor_dim": 256,
+        "n_layers": -1,
+        "num_heads": 4,
+        "flash": False,  # enable FlashAttention if available.
+        "mp": False,  # enable mixed precision
+        "filter_threshold": 0.0,  # match threshold
+        "checkpointed": False,
+        "weights": None,  # either a path or the name of pretrained weights (disk, ...)
+        "weights_from_version": "v0.1_arxiv",
+        "loss": {
+            "gamma": 1.0,
+            "fn": "nll",
+            "nll_balancing": 0.5,
+        },
+    }
 
+    required_data_keys = ["view0", "view1"]
+    # required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1"] 
+    # required_data_keys = ["keypoints0", "keypoints1", "descriptors0", "descriptors1", "T_0to1"] 
+
+    def __init__(self, conf) -> None:
+        super().__init__()
+        self.conf = conf = OmegaConf.merge(self.default_conf, conf)
+        # Misc
+        self.config_loftr = default_cfg # from loftr module
+        
+        self.time_embed_channels = conf.descriptor_dim * 4
+        self.time_embed = nn.Sequential(
+            nn.Linear(conf.descriptor_dim, self.time_embed_channels), 
+            nn.ReLU(), 
+            nn.Linear(self.time_embed_channels, self.time_embed_channels), 
+        )
+
+        if conf.input_dim != conf.descriptor_dim:
+            self.input_proj = nn.Linear(conf.input_dim, conf.descriptor_dim, bias=True)
+        else:
+            self.input_proj = nn.Identity()
+            
+        # local keypoint encoder
+        self.backbone = build_backbone(self.config_loftr)
+        self.pos_encoding = PositionEncodingSine(
+            self.config_loftr['coarse']['d_model'],
+            temp_bug_fix=self.config_loftr['coarse']['temp_bug_fix'])
+        self.loftr_coarse = LocalFeatureTransformer(self.config_loftr['coarse'])
+        self.coarse_matching = CoarseMatching(self.config_loftr['match_coarse'])
+
+        head_dim = conf.descriptor_dim // conf.num_heads
+        self.posenc = LearnableFourierPositionalEncoding(
+            2 + 2 * conf.add_scale_ori, head_dim, head_dim
+        )
+
+        h, n, d = conf.num_heads, conf.n_layers, conf.descriptor_dim
+
+        self.transformers = nn.ModuleList(
+            [TransformerLayer(d, h, self.time_embed_channels, conf.flash) for layer_index in range(n)]
+        )
+
+        self.log_assignment = nn.ModuleList([MatchAssignment(d) for _ in range(n)])
+        self.token_confidence = nn.ModuleList(
+            # [TokenConfidence(d) for _ in range(n - 1)]
+            [TokenConfidence(d) for _ in range(n)]
+        )
+
+        self.loss_fn = NLLLoss(conf.loss)
+
+        state_dict = None
+        if conf.weights is not None:
+            # weights can be either a path or an existing file from official LG
+            if Path(conf.weights).exists():
+                state_dict = torch.load(conf.weights, map_location="cpu")
+            elif (Path(DATA_PATH) / conf.weights).exists():
+                state_dict = torch.load(
+                    str(DATA_PATH / conf.weights), map_location="cpu"
+                )
+            else:
+                assert FileExistsError
+
+        if state_dict:
+            # rename old state dict entries
+            for i in range(self.conf.n_layers):
+                pattern = f"self_attn.{i}", f"transformers.{i}.self_attn"
+                state_dict = {k.replace(*pattern): v for k, v in state_dict.items()}
+                pattern = f"cross_attn.{i}", f"transformers.{i}.cross_attn"
+                state_dict = {k.replace(*pattern): v for k, v in state_dict.items()}
+            self.load_state_dict(state_dict, strict=False)
+
+    def compile(self, mode="reduce-overhead"):
+        if self.conf.width_confidence != -1:
+            warnings.warn(
+                "Point pruning is partially disabled for compiled forward.",
+                stacklevel=2,
+            )
+
+        for i in range(self.conf.n_layers):
+            self.transformers[i] = torch.compile(
+                self.transformers[i], mode=mode, fullgraph=True
+            )
+
+    def forward(self, adj_mat_fore, timesteps, data: dict) -> dict:
+        adj_mat_fore[...,:-1,:-1] = adj_mat_fore[...,:-1,:-1]/self.conf.scale+0.5
+        adj_mat_fore[...,:-1,-1] = adj_mat_fore[...,:-1,-1]/self.conf.scale+0.5
+        adj_mat_fore[...,-1,:-1] = adj_mat_fore[...,-1,:-1]/self.conf.scale+0.5
+        adj_mat_fore = adj_mat_fore.squeeze(1)
+        time_embd = self.time_embed(timestep_embedding(timesteps, self.conf.descriptor_dim))
+
+        for key in self.required_data_keys:
+            assert key in data, f"Missing key {key} in data"
+            
+        # # Off the shelf (superpoint)
+        # kpts0_old, kpts1_old = data["keypoints0"], data["keypoints1"]
+        # desc0_old = data["descriptors0"].contiguous()
+        # desc1_old = data["descriptors1"].contiguous()
+        # print("desc0:", desc0_old.shape, 'kpts0:', kpts0_old.shape) 
+        
+        # # detector free
+        # pdb.set_trace()
+        # kpts0, desc0, conf0 = self.keypoint_encoder(data['view0']['image'])
+        # kpts1, desc1, conf1 = self.keypoint_encoder(data['view1']['image'])
+        
+        
+        # 1. Local Feature CNN
+        pdb.set_trace()
+        data.update({
+            'bs': data["view0"]["image"].size(0), # [B,3,H,W]???
+            'hw0_i': data["view0"]["image"].shape[2:], 'hw1_i': data["view1"]["image"].shape[2:]
+        })
+
+        if data['hw0_i'] == data['hw1_i']:  # faster & better BN convergence
+            feats_c, feats_f = self.backbone(torch.cat([data['view0']['image'], data['view1']['image']], dim=0))
+            (feat_c0, feat_c1), (feat_f0, feat_f1) = feats_c.split(data['bs']), feats_f.split(data['bs'])
+        else:  # handle different input shapes
+            (feat_c0, feat_f0), (feat_c1, feat_f1) = self.backbone(data['view0']['image']), self.backbone(data['view1']['image'])
+
+        data.update({
+            'hw0_c': feat_c0.shape[2:], 'hw1_c': feat_c1.shape[2:],
+            'hw0_f': feat_f0.shape[2:], 'hw1_f': feat_f1.shape[2:]
+        })
+
+        # 2. coarse-level loftr module
+        # add featmap with positional encoding, then flatten it to sequence [N, HW, C]
+        feat_c0 = rearrange(self.pos_encoding(feat_c0), 'n c h w -> n (h w) c')
+        feat_c1 = rearrange(self.pos_encoding(feat_c1), 'n c h w -> n (h w) c')
+
+        mask_c0 = mask_c1 = None  # mask is useful in training
+        if 'mask0' in data:
+            mask_c0, mask_c1 = data['mask0'].flatten(-2), data['mask1'].flatten(-2)
+        feat_c0, feat_c1 = self.loftr_coarse(feat_c0, feat_c1, mask_c0, mask_c1)
+
+        # 3. match coarse-level
+        self.coarse_matching(feat_c0, feat_c1, data, mask_c0=mask_c0, mask_c1=mask_c1)
+
+        
+
+        if self.conf.add_scale_ori:
+            sc0, o0 = data["scales0"], data["oris0"]
+            sc1, o1 = data["scales1"], data["oris1"]
+            kpts0 = torch.cat(
+                [
+                    kpts0,
+                    sc0 if sc0.dim() == 3 else sc0[..., None],
+                    o0 if o0.dim() == 3 else o0[..., None],
+                ],
+                -1,
+            )
+            kpts1 = torch.cat(
+                [
+                    kpts1,
+                    sc1 if sc1.dim() == 3 else sc1[..., None],
+                    o1 if o1.dim() == 3 else o1[..., None],
+                ],
+                -1,
+            )
+
+
+        assert desc0.shape[-1] == self.conf.input_dim
+        assert desc1.shape[-1] == self.conf.input_dim
+        if torch.is_autocast_enabled():
+            desc0 = desc0.half()
+            desc1 = desc1.half()
+        desc0 = self.input_proj(desc0)
+        desc1 = self.input_proj(desc1)
+        # cache positional embeddings
+        encoding0 = self.posenc(kpts0)
+        encoding1 = self.posenc(kpts1)
+        if torch.isnan(encoding0).any() or torch.isnan(encoding1).any():
+            encoding0 = encoding0
+            encoding1 = encoding1
+            assert 1==2
+
+        # GNN + final_proj + assignment
+        all_desc0, all_desc1 = [], []
+
+        for i in range(self.conf.n_layers):
+            if self.conf.checkpointed and self.training:
+                desc0, desc1 = checkpoint(
+                    self.transformers[i], desc0, desc1, encoding0, encoding1, time_embd, adj_mat_fore[...,:-1,:-1]
+                )
+            else:
+                desc0, desc1 = self.transformers[i](desc0, desc1, encoding0, encoding1, time_embd, adj_mat_fore[...,:-1,:-1])
+            if self.training or i == self.conf.n_layers - 1:
+                all_desc0.append(desc0)
+                all_desc1.append(desc1)
+                continue  # no early stopping or adaptive width at last layer
+
+        desc0, desc1 = desc0[..., :m, :], desc1[..., :n, :]
+        scores, _ = self.log_assignment[i](desc0, desc1)
+        m0, m1, mscores0, mscores1 = filter_matches(scores, self.conf.filter_threshold)
+
+        adj_mat = scores.unsqueeze(1).clone()
+        adj_mat[...,:-1,:-1] = (adj_mat[...,:-1,:-1].exp()-0.5)*self.conf.scale
+        adj_mat[...,:-1,-1] = (adj_mat[...,:-1,-1].exp()-0.5)*self.conf.scale
+        adj_mat[...,-1,:-1] = (adj_mat[...,-1,:-1].exp()-0.5)*self.conf.scale
+
+        ### TODO: Relative Pose Estimation (PnP vs W/o depth)
+        # if "depth" in data['view0']:
+        #     Esti_T_0to1 = solve_pnp_ransac(data["keypoints0"],
+        #                                     data["keypoints1"],
+        #                                     m0,
+        #                                     data['view0']['camera'],
+        #                                     data['view1']['camera'],
+        #                                     data['view0']['depth']) # kpts0, kpts1, matches0, cam0, cam1, depth0
+        # else:
+        #     Esti_T_0to1 = None
+
+        pred = {
+            "matches0": m0,
+            "matches1": m1,
+            "matching_scores0": mscores0,
+            "matching_scores1": mscores1,
+            "ref_descriptors0": torch.stack(all_desc0, 1),
+            "ref_descriptors1": torch.stack(all_desc1, 1),
+            "log_assignment": scores,
+            "adj_mat": adj_mat,
+            "keypoints0": kpts0,
+            "keypoints1": kpts1,
+            "descriptors0": desc0,
+            "descriptors1": desc1,
+            "keypoint_scores0": mconf0,
+            "keypoint_scores1": mconf1,
+            # "Esti_T_0to1": Esti_T_0to1
+        }
+
+        return pred
+
+    def loss(self, pred, data): # L_match loss and transformer related loss??
+        def loss_params(pred, i):
+            la, _ = self.log_assignment[i](
+                pred["ref_descriptors0"][:, i], pred["ref_descriptors1"][:, i]
+            )
+            return {
+                "log_assignment": la,
+            }
+
+        sum_weights = 1.0
+        nll, gt_weights, loss_metrics = self.loss_fn(loss_params(pred, -1), data)
+        N = pred["ref_descriptors0"].shape[1]
+        losses = {"matcher_total": nll, "last": nll.clone().detach(), **loss_metrics}
+
+        if self.training:
+            losses["confidence"] = 0.0
+
+        losses["row_norm"] = pred["log_assignment"].exp()[:, :-1].sum(2).mean(1)
+
+        if self.training:
+            #L_match
+            for i in range(N):
+                params_i = loss_params(pred, i)
+                nll, _, _ = self.loss_fn(params_i, data, weights=gt_weights)
+
+                if self.conf.loss.gamma > 0.0:
+                    weight = self.conf.loss.gamma ** (N - i)
+                else:
+                    weight = i + 1
+                sum_weights += weight
+                losses["matcher_total"] = losses["matcher_total"] + nll * weight
+
+                losses["confidence"] += self.token_confidence[i].loss(
+                    pred["ref_descriptors0"][:, i],
+                    pred["ref_descriptors1"][:, i],
+                    params_i["log_assignment"],
+                    pred["log_assignment"],
+                ) / (N)
+
+                del params_i
+
+            #L_epipolar
+            if "T_0to1" in data:
+                L_epi = sampson_epipolar_loss( #32개 이미지 쌍이 들어감!
+                    data["keypoints0"],
+                    data["keypoints1"],
+                    pred["matches0"],
+                    data["T_0to1"],
+                    data['view0']['camera'],
+                    data['view1']['camera'],
+                    weight=1.0  # or some tunable value
+                ) # kpts0, kpts1, matches0, T0to1, cam0, cam1, weight=1.0
+                losses["geometry"] = L_epi # * self.conf.epi_weight
+            else:
+                losses["geometry"] = 0.0
+
+        losses["matcher_total"] /= sum_weights
+        # confidences
+        if self.training:
+            losses["matcher_total"] = losses["matcher_total"]*self.conf.matcher_loss_weight + losses["confidence"] + self.conf.epi_weight * losses["geometry"] # TODO: lambda??weight??
+
+        if not self.training:
+            # add metrics
+            metrics = matcher_metrics(pred, data)
+        else:
+            metrics = {}
+        return losses, metrics
 
 __main_model__ = DiffGlue
