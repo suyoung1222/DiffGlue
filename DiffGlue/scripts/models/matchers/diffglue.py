@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from omegaconf import OmegaConf
 from torch import nn
 from torch.utils.checkpoint import checkpoint
+import torchvision.transforms.functional as TF
+from torchvision.utils import save_image
 
 from ...settings import DATA_PATH
 from ..utils.losses import NLLLoss
@@ -412,67 +414,7 @@ def filter_matches(scores: torch.Tensor, th: float): # TODO: how is this thresho
     m1 = torch.where(valid1, m1, -1)
     return m0, m1, mscores0, mscores1
 
-# class LoFTR_KEYPOINT(nn.Module):
-#     def __init__(self, config):
-#         super().__init__()
-#         # Misc
-#         self.config = config
 
-#         # Modules
-#         self.backbone = build_backbone(config)
-#         self.pos_encoding = PositionEncodingSine(
-#             config['coarse']['d_model'],
-#             temp_bug_fix=config['coarse']['temp_bug_fix'])
-#         self.loftr_coarse = LocalFeatureTransformer(config['coarse'])
-
-#     def forward(self, data):
-#         """ 
-#         Update:
-#             data (dict): {
-#                 'image0': (torch.Tensor): (N, 1, H, W)
-#                 'image1': (torch.Tensor): (N, 1, H, W)
-#                 'mask0'(optional) : (torch.Tensor): (N, H, W) '0' indicates a padded position
-#                 'mask1'(optional) : (torch.Tensor): (N, H, W)
-#             }
-#         """
-#         # 1. Local Feature CNN
-#         data.update({
-#             'bs': data['image0'].size(0),
-#             'hw0_i': data['image0'].shape[2:], 'hw1_i': data['image1'].shape[2:]
-#         })
-
-#         if data['hw0_i'] == data['hw1_i']:  # faster & better BN convergence
-#             # TODO: backbone 은 그저 resnet 
-#             feats_c, feats_f = self.backbone(torch.cat([data['image0'], data['image1']], dim=0))
-#             (feat_c0, feat_c1), (feat_f0, feat_f1) = feats_c.split(data['bs']), feats_f.split(data['bs'])
-#         else:  # handle different input shapes
-#             (feat_c0, feat_f0), (feat_c1, feat_f1) = self.backbone(data['image0']), self.backbone(data['image1'])
-
-#         data.update({
-#             'hw0_c': feat_c0.shape[2:], 'hw1_c': feat_c1.shape[2:],
-#             'hw0_f': feat_f0.shape[2:], 'hw1_f': feat_f1.shape[2:]
-#         })
-
-# class ImageToKeypointsAndDescriptors(nn.Module):
-#     def __init__(self, desc_dim=256, K=2048):
-#         super().__init__()
-#         self.K = K
-#         self.enc = nn.Sequential(
-#             nn.Conv2d(3, 32, 3, 2, 1), nn.ReLU(),
-#             nn.Conv2d(32, 64, 3, 2, 1), nn.ReLU(),
-#             nn.Conv2d(64, 128, 3, 2, 1), nn.ReLU(),
-#             nn.Conv2d(128, 128, 3, 1, 1), nn.ReLU()
-#         )
-#         self.heatmap_head = nn.Conv2d(128, 1, 1)
-#         self.desc_head = nn.Conv2d(128, desc_dim, 1)
-
-#     def forward(self, img):
-#         feat = self.enc(img)
-#         heat = self.heatmap_head(feat)
-#         desc_map = F.normalize(self.desc_head(feat), dim=1)
-#         coords, kp_conf = soft_topk_coordinates(heat, K=self.K)
-#         descs = sample_descriptors(desc_map, coords)
-#         return coords, descs, kp_conf
 
 class ResidualBlock(nn.Module):
     def __init__(self, ch):
@@ -983,11 +925,25 @@ class DiffGlue(nn.Module):
         
         
         # 1. Local Feature CNN
-        pdb.set_trace()
         data.update({
-            'bs': data["view0"]["image"].size(0), # [B,3,H,W]???
+            'bs': data["view0"]["image"].size(0), # B, [B,3,H,W]???
             'hw0_i': data["view0"]["image"].shape[2:], 'hw1_i': data["view1"]["image"].shape[2:]
         })
+ 
+        # to grayscale       
+        data["view0"]["image"] = TF.rgb_to_grayscale(
+            data["view0"]["image"], num_output_channels=1
+        )
+        data["view1"]["image"] = TF.rgb_to_grayscale(
+            data["view1"]["image"], num_output_channels=1
+        )
+        
+        # img = data["view0"]["image"]
+        # save_image(
+        #     img[0],               # shape: 1 x H x W
+        #     "debug_view0.png",
+        #     normalize=True
+        # )
 
         if data['hw0_i'] == data['hw1_i']:  # faster & better BN convergence
             feats_c, feats_f = self.backbone(torch.cat([data['view0']['image'], data['view1']['image']], dim=0))
@@ -1011,9 +967,18 @@ class DiffGlue(nn.Module):
         feat_c0, feat_c1 = self.loftr_coarse(feat_c0, feat_c1, mask_c0, mask_c1)
 
         # 3. match coarse-level
-        self.coarse_matching(feat_c0, feat_c1, data, mask_c0=mask_c0, mask_c1=mask_c1)
+        self.coarse_matching(feat_c0, feat_c1, data, mask_c0=mask_c0, mask_c1=mask_c1)     
 
-        
+
+        kpts0, kpts1 = data["keypoints0"], data["keypoints1"]
+        b, m, _ = kpts0.shape
+        b, n, _ = kpts1.shape
+        device = kpts0.device
+        if "view0" in data.keys() and "view1" in data.keys():
+            size0 = data["view0"].get("image_size")
+            size1 = data["view1"].get("image_size")
+        kpts0 = normalize_keypoints(kpts0, size0).clone()
+        kpts1 = normalize_keypoints(kpts1, size1).clone()
 
         if self.conf.add_scale_ori:
             sc0, o0 = data["scales0"], data["oris0"]
@@ -1035,6 +1000,8 @@ class DiffGlue(nn.Module):
                 -1,
             )
 
+        desc0 = data["descriptors0"].contiguous()
+        desc1 = data["descriptors1"].contiguous()
 
         assert desc0.shape[-1] == self.conf.input_dim
         assert desc1.shape[-1] == self.conf.input_dim
@@ -1054,7 +1021,7 @@ class DiffGlue(nn.Module):
         # GNN + final_proj + assignment
         all_desc0, all_desc1 = [], []
 
-        for i in range(self.conf.n_layers):
+        for i in range(self.conf.n_layers): # Iteration Start
             if self.conf.checkpointed and self.training:
                 desc0, desc1 = checkpoint(
                     self.transformers[i], desc0, desc1, encoding0, encoding1, time_embd, adj_mat_fore[...,:-1,:-1]
@@ -1099,8 +1066,8 @@ class DiffGlue(nn.Module):
             "keypoints1": kpts1,
             "descriptors0": desc0,
             "descriptors1": desc1,
-            "keypoint_scores0": mconf0,
-            "keypoint_scores1": mconf1,
+            # "keypoint_scores0": mconf0,
+            # "keypoint_scores1": mconf1,
             # "Esti_T_0to1": Esti_T_0to1
         }
 

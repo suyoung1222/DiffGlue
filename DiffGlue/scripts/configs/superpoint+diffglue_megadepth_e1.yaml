@@ -1,7 +1,7 @@
 data:
     name: megadepth
     preprocessing:
-        resize: 1024
+        resize: 1024 #1024
         side: long
         square_pad: True
     train_split: train_scenes_clean.txt
@@ -13,12 +13,12 @@ data:
     num_overlap_bins: 3
     read_depth: true
     read_image: true
-    batch_size: 16
+    batch_size: 1 #16
     num_workers: 8
     load_features:
         do: false  # enable this if you have cached predictions
         path: exports/megadepth-undist-depth-r1024_SP-k2048-nms3/{scene}.h5
-        padding_length: 2048
+        padding_length: 4096 #2048
         padding_fn: pad_local_features
 model:
     name: two_view_pipeline
