@@ -17,22 +17,50 @@ import torch
 import torch.nn.functional as F
 
 # Add paths for imports - scripts folder structure
-script_dir = Path(__file__).parent.parent  # scripts folder
+script_dir = Path(__file__).parent.parent  # scripts folder  
 repo_root = script_dir.parent.parent  # repository root
-sys.path.insert(0, str(script_dir))
-sys.path.insert(0, str(repo_root / "demo"))  # For demo models
+demo_models_path = repo_root / "demo" / "models"
 
-from models.matching import Matching as DiffGlueMatching
-from models.superpoint import SuperPoint
+# Import demo models by adding demo/models to path and importing as modules
+import importlib.util
+matching_spec = importlib.util.spec_from_file_location("demo_matching", demo_models_path / "matching.py")
+demo_matching = importlib.util.module_from_spec(matching_spec)
+matching_spec.loader.exec_module(demo_matching)
 
-# Try to import LoFTR
+superpoint_spec = importlib.util.spec_from_file_location("demo_superpoint", demo_models_path / "superpoint.py")
+demo_superpoint = importlib.util.module_from_spec(superpoint_spec)
+superpoint_spec.loader.exec_module(demo_superpoint)
+
+DiffGlueMatching = demo_matching.Matching
+SuperPoint = demo_superpoint.SuperPoint
+
+# Try to import LoFTR - use try/except with different import methods
+LOFTR_AVAILABLE = False
 try:
+    # Try relative import first (when run as module)
     from ..models.matchers.LoFTR.src.loftr import LoFTR
     from ..models.matchers.LoFTR.src.config.default import get_cfg_defaults
     LOFTR_AVAILABLE = True
-except ImportError:
-    print("Warning: LoFTR not available")
-    LOFTR_AVAILABLE = False
+except (ImportError, ValueError):
+    try:
+        # Try absolute import
+        script_dir = Path(__file__).parent.parent
+        loftr_path = script_dir / "models" / "matchers" / "LoFTR" / "src" / "loftr.py"
+        config_path = script_dir / "models" / "matchers" / "LoFTR" / "src" / "config" / "default.py"
+        if loftr_path.exists() and config_path.exists():
+            loftr_spec = importlib.util.spec_from_file_location("loftr", loftr_path)
+            loftr_module = importlib.util.module_from_spec(loftr_spec)
+            loftr_spec.loader.exec_module(loftr_module)
+            LoFTR = loftr_module.LoFTR
+            
+            config_spec = importlib.util.spec_from_file_location("loftr_config", config_path)
+            config_module = importlib.util.module_from_spec(config_spec)
+            config_spec.loader.exec_module(config_module)
+            get_cfg_defaults = config_module.get_cfg_defaults
+            LOFTR_AVAILABLE = True
+    except Exception:
+        print("Warning: LoFTR not available")
+        LOFTR_AVAILABLE = False
 
 # Try to import SuperGlue (via kornia or provide alternative)
 try:
