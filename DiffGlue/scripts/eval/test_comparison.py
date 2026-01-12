@@ -634,6 +634,10 @@ def main():
     
     args = parser.parse_args()
     
+    # Determine paths
+    script_dir = Path(__file__).parent.parent  # scripts folder
+    repo_root = script_dir.parent.parent  # repository root
+    
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device: {device}')
     
