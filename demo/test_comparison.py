@@ -454,6 +454,75 @@ def estimate_pose_from_matches(mkpts0, mkpts1, K, ransac_threshold=1e-3):
     return R, t, T, ransac_mkpts0, ransac_mkpts1
 
 
+# ==================== Dataset Loading Functions ====================
+
+def parse_pairs_line(line):
+    """Parse a line from pairs_calibrated file format
+    Format: image0_path image1_path K0[9] K1[9] R[9] t[3]
+    Returns: (img0_path, img1_path, K0, K1, R, t)
+    """
+    parts = line.strip().split()
+    if len(parts) < 32:
+        raise ValueError(f"Invalid pairs line format, expected 32 values, got {len(parts)}")
+    
+    img0_path = parts[0]
+    img1_path = parts[1]
+    
+    # Parse K0 (9 values: fx, 0, cx, 0, fy, cy, 0, 0, 1)
+    K0_flat = [float(x) for x in parts[2:11]]
+    K0 = np.array(K0_flat).reshape(3, 3).astype(np.float32)
+    
+    # Parse K1 (9 values)
+    K1_flat = [float(x) for x in parts[11:20]]
+    K1 = np.array(K1_flat).reshape(3, 3).astype(np.float32)
+    
+    # Parse R (9 values for 3x3 rotation matrix)
+    R_flat = [float(x) for x in parts[20:29]]
+    R = np.array(R_flat).reshape(3, 3).astype(np.float32)
+    
+    # Parse t (3 values for translation vector)
+    t_flat = [float(x) for x in parts[29:32]]
+    t = np.array(t_flat).astype(np.float32)
+    
+    return img0_path, img1_path, K0, K1, R, t
+
+
+def load_pair_from_dataset(pairs_file, pair_index, dataset_root):
+    """Load a pair from the megadepth1500 dataset format"""
+    pairs_file = Path(pairs_file)
+    if not pairs_file.exists():
+        raise FileNotFoundError(f"Pairs file not found: {pairs_file}")
+    
+    with open(pairs_file, 'r') as f:
+        lines = f.readlines()
+    
+    if pair_index >= len(lines):
+        raise IndexError(f"Pair index {pair_index} out of range (total pairs: {len(lines)})")
+    
+    line = lines[pair_index]
+    img0_path, img1_path, K0, K1, R, t = parse_pairs_line(line)
+    
+    # Build full image paths
+    dataset_root = Path(dataset_root)
+    img0_full = dataset_root / img0_path
+    img1_full = dataset_root / img1_path
+    
+    # Build ground truth transformation matrix
+    T_gt = np.eye(4, dtype=np.float32)
+    T_gt[:3, :3] = R
+    T_gt[:3, 3] = t
+    
+    return {
+        'img0_path': str(img0_full),
+        'img1_path': str(img1_full),
+        'K0': K0,
+        'K1': K1,
+        'R': R,
+        't': t,
+        'T_gt': T_gt
+    }
+
+
 # ==================== Main Evaluation Function ====================
 
 def evaluate_method(img0, img1, inp0, inp1, method_name, device, config=None, K=None):
@@ -527,16 +596,25 @@ def main():
     parser = argparse.ArgumentParser(
         description='Compare DiffGlue, SuperGlue, and LoFTR with visualization'
     )
-    parser.add_argument('--image0', type=str, required=True,
-                       help='Path to first image')
-    parser.add_argument('--image1', type=str, required=True,
-                       help='Path to second image')
+    
+    # Image inputs (either use pairs_file OR image0/image1)
+    parser.add_argument('--pairs_file', type=str, default=None,
+                       help='Path to pairs_calibrated.txt file (uses megadepth1500 format by default)')
+    parser.add_argument('--pair_index', type=int, default=0,
+                       help='Index of pair to use from pairs_file (default: 0)')
+    parser.add_argument('--dataset_root', type=str, default='DiffGlue/data_su/megadepth1500/images',
+                       help='Root directory for dataset images (default: DiffGlue/data_su/megadepth1500/images)')
+    parser.add_argument('--image0', type=str, default=None,
+                       help='Path to first image (required if not using --pairs_file)')
+    parser.add_argument('--image1', type=str, default=None,
+                       help='Path to second image (required if not using --pairs_file)')
+    
     parser.add_argument('--resize', type=int, nargs='+', default=[1600],
                        help='Resize images (max dimension)')
     parser.add_argument('--K', type=str, default=None,
-                       help='Camera intrinsic matrix (fx,fy,cx,cy) or path to .npy file')
+                       help='Camera intrinsic matrix (fx,fy,cx,cy) or path to .npy file (not used if --pairs_file provided)')
     parser.add_argument('--gt_pose', type=str, default=None,
-                       help='Ground truth relative pose (4x4 matrix .npy file)')
+                       help='Ground truth relative pose (4x4 matrix .npy file) (not used if --pairs_file provided)')
     parser.add_argument('--save', type=str, default=None,
                        help='Save visualization to file')
     parser.add_argument('--no_display', action='store_true',
@@ -555,9 +633,42 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device: {device}')
     
-    # Load images
-    img0, inp0, scales0 = read_image(args.image0, device, args.resize)
-    img1, inp1, scales1 = read_image(args.image1, device, args.resize)
+    # Load images and metadata
+    T_gt = None
+    K = None
+    
+    if args.pairs_file:
+        # Use dataset format
+        print(f"Loading pair {args.pair_index} from {args.pairs_file}")
+        pair_data = load_pair_from_dataset(args.pairs_file, args.pair_index, args.dataset_root)
+        img0_path = pair_data['img0_path']
+        img1_path = pair_data['img1_path']
+        K0 = pair_data['K0']
+        K1 = pair_data['K1']
+        T_gt = pair_data['T_gt']
+        
+        print(f"Image0: {img0_path}")
+        print(f"Image1: {img1_path}")
+        print(f"K0:\n{K0}")
+        print(f"K1:\n{K1}")
+        print(f"Ground truth pose:\n{T_gt}")
+        
+        # Use K0 for pose estimation (or average of K0 and K1)
+        K = K0  # Using first camera's intrinsics
+        
+        # Load images
+        img0, inp0, scales0 = read_image(img0_path, device, args.resize)
+        img1, inp1, scales1 = read_image(img1_path, device, args.resize)
+        
+    else:
+        # Use individual image paths
+        if args.image0 is None or args.image1 is None:
+            parser.error("Either --pairs_file or both --image0 and --image1 must be provided")
+        
+        img0_path = args.image0
+        img1_path = args.image1
+        img0, inp0, scales0 = read_image(img0_path, device, args.resize)
+        img1, inp1, scales1 = read_image(img1_path, device, args.resize)
     
     if img0 is None or img1 is None:
         print("Error: Failed to load images")
@@ -565,32 +676,31 @@ def main():
     
     print(f"Image0 shape: {img0.shape}, Image1 shape: {img1.shape}")
     
-    # Setup camera intrinsics
-    K = None
-    if args.K:
-        if os.path.exists(args.K):
-            K = np.load(args.K)
+    # Setup camera intrinsics (only if not using dataset format)
+    if not args.pairs_file:
+        if args.K:
+            if os.path.exists(args.K):
+                K = np.load(args.K)
+            else:
+                # Parse as fx,fy,cx,cy
+                params = [float(x) for x in args.K.split(',')]
+                if len(params) == 4:
+                    K = np.array([[params[0], 0, params[2]],
+                                 [0, params[1], params[3]],
+                                 [0, 0, 1]])
+            print(f"Using camera matrix K:\n{K}")
         else:
-            # Parse as fx,fy,cx,cy
-            params = [float(x) for x in args.K.split(',')]
-            if len(params) == 4:
-                K = np.array([[params[0], 0, params[2]],
-                             [0, params[1], params[3]],
-                             [0, 0, 1]])
-        print(f"Using camera matrix K:\n{K}")
-    else:
-        # Default camera matrix
-        h, w = img0.shape[:2]
-        fx = fy = max(h, w)
-        cx, cy = w / 2, h / 2
-        K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-        print(f"Using default camera matrix K:\n{K}")
-    
-    # Load ground truth pose if provided
-    T_gt = None
-    if args.gt_pose and os.path.exists(args.gt_pose):
-        T_gt = np.load(args.gt_pose)
-        print(f"Loaded ground truth pose:\n{T_gt}")
+            # Default camera matrix
+            h, w = img0.shape[:2]
+            fx = fy = max(h, w)
+            cx, cy = w / 2, h / 2
+            K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+            print(f"Using default camera matrix K:\n{K}")
+        
+        # Load ground truth pose if provided
+        if args.gt_pose and os.path.exists(args.gt_pose):
+            T_gt = np.load(args.gt_pose)
+            print(f"Loaded ground truth pose:\n{T_gt}")
     
     # DiffGlue config
     config = {
