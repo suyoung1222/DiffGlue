@@ -19,20 +19,16 @@ import torch.nn.functional as F
 # Add paths for imports - scripts folder structure
 script_dir = Path(__file__).parent.parent  # scripts folder  
 repo_root = script_dir.parent.parent  # repository root
-demo_models_path = repo_root / "demo" / "models"
+demo_path = repo_root / "demo"
 
-# Import demo models by adding demo/models to path and importing as modules
-import importlib.util
-matching_spec = importlib.util.spec_from_file_location("demo_matching", demo_models_path / "matching.py")
-demo_matching = importlib.util.module_from_spec(matching_spec)
-matching_spec.loader.exec_module(demo_matching)
+# Add demo to sys.path so we can import models as a package
+# This must come before any imports that might conflict
+if str(demo_path) not in sys.path:
+    sys.path.insert(0, str(demo_path))
 
-superpoint_spec = importlib.util.spec_from_file_location("demo_superpoint", demo_models_path / "superpoint.py")
-demo_superpoint = importlib.util.module_from_spec(superpoint_spec)
-superpoint_spec.loader.exec_module(demo_superpoint)
-
-DiffGlueMatching = demo_matching.Matching
-SuperPoint = demo_superpoint.SuperPoint
+# Import demo models - now models refers to demo/models
+from models.matching import Matching as DiffGlueMatching
+from models.superpoint import SuperPoint
 
 # Try to import LoFTR - use try/except with different import methods
 LOFTR_AVAILABLE = False
