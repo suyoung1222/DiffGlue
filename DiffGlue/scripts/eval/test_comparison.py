@@ -16,17 +16,19 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-# Add paths for imports
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).parent.parent / "DiffGlue" / "scripts"))
+# Add paths for imports - scripts folder structure
+script_dir = Path(__file__).parent.parent  # scripts folder
+repo_root = script_dir.parent.parent  # repository root
+sys.path.insert(0, str(script_dir))
+sys.path.insert(0, str(repo_root / "demo"))  # For demo models
 
 from models.matching import Matching as DiffGlueMatching
 from models.superpoint import SuperPoint
 
 # Try to import LoFTR
 try:
-    from DiffGlue.scripts.models.matchers.LoFTR.src.loftr import LoFTR
-    from DiffGlue.scripts.models.matchers.LoFTR.src.config.default import get_cfg_defaults
+    from ..models.matchers.LoFTR.src.loftr import LoFTR
+    from ..models.matchers.LoFTR.src.config.default import get_cfg_defaults
     LOFTR_AVAILABLE = True
 except ImportError:
     print("Warning: LoFTR not available")
@@ -320,10 +322,12 @@ def run_loftr(image0, image1, inp0, inp1, device):
         matcher = LoFTR(config=_default_cfg).eval().to(device)
         
         # Load pretrained weights (adjust path as needed)
-        ckpt_path = Path("DiffGlue/scripts/models/matchers/LoFTR/weights/outdoor_ds.ckpt")
+        script_dir = Path(__file__).parent.parent  # scripts folder
+        ckpt_path = script_dir / "models" / "matchers" / "LoFTR" / "weights" / "outdoor_ds.ckpt"
         if not ckpt_path.exists():
-            # Try alternative path
-            ckpt_path = Path(__file__).parent.parent / "DiffGlue" / "scripts" / "models" / "matchers" / "LoFTR" / "weights" / "outdoor_ds.ckpt"
+            # Try alternative path from repo root
+            repo_root = script_dir.parent.parent
+            ckpt_path = repo_root / "DiffGlue" / "scripts" / "models" / "matchers" / "LoFTR" / "weights" / "outdoor_ds.ckpt"
         
         if ckpt_path.exists():
             ckpt = torch.load(str(ckpt_path), map_location=device)
@@ -602,8 +606,8 @@ def main():
                        help='Path to pairs_calibrated.txt file (uses megadepth1500 format by default)')
     parser.add_argument('--pair_index', type=int, default=0,
                        help='Index of pair to use from pairs_file (default: 0)')
-    parser.add_argument('--dataset_root', type=str, default='DiffGlue/data_su/megadepth1500/images',
-                       help='Root directory for dataset images (default: DiffGlue/data_su/megadepth1500/images)')
+    parser.add_argument('--dataset_root', type=str, default=None,
+                       help='Root directory for dataset images (default: auto-detect from repo root)')
     parser.add_argument('--image0', type=str, default=None,
                        help='Path to first image (required if not using --pairs_file)')
     parser.add_argument('--image1', type=str, default=None,
@@ -640,6 +644,17 @@ def main():
     if args.pairs_file:
         # Use dataset format
         print(f"Loading pair {args.pair_index} from {args.pairs_file}")
+        # Auto-detect dataset root if not provided
+        if args.dataset_root is None:
+            # Try to find from pairs_file location
+            pairs_path = Path(args.pairs_file)
+            if 'megadepth1500' in str(pairs_path):
+                # Assume pairs file is in data_su/megadepth1500/
+                dataset_root = pairs_path.parent / "images"
+            else:
+                # Default to repo structure
+                dataset_root = repo_root / "DiffGlue" / "data_su" / "megadepth1500" / "images"
+            args.dataset_root = str(dataset_root)
         pair_data = load_pair_from_dataset(args.pairs_file, args.pair_index, args.dataset_root)
         img0_path = pair_data['img0_path']
         img1_path = pair_data['img1_path']
