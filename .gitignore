@@ -173,8 +173,24 @@ outputs/
 *.gz
 *.pt
 *.pth
+*.h5
+*.db3
+*.zip
 *.log.vscode/
 DiffGlue/data_su/
 DiffGlue/sbatch_*.txt
 *.sbatch
 /slurm
+
+# Model weights and checkpoints
+DiffGlue/scripts/models/weights/*.tar
+DiffGlue/scripts/models/weights/hypers/*.tar
+DiffGlue/scripts/models/covisnet/weights/*.ts
+
+# Dataset files
+DiffGlue/scripts/datasets/straight_bag/*.db3
+DiffGlue/scripts/datasets/straight_bag/*.zip
+
+# Results and outputs
+DiffGlue/outputs/results/**/*.h5
+DiffGlue/outputs/**/*.h5
