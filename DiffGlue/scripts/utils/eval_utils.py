@@ -21,6 +21,13 @@ except ImportError:
     class CvBridge:
         def imgmsg_to_cv2(self, *args, **kwargs):
             raise ImportError("cv_bridge not available. Install ROS2 cv_bridge package for ROS bag support.")
+    
+    # Fallback for quaternion_from_matrix using scipy
+    def quaternion_from_matrix(matrix):
+        """Convert rotation matrix to quaternion using scipy (fallback when tf_transformations not available)"""
+        from scipy.spatial.transform import Rotation as R
+        rot = R.from_matrix(matrix[:3, :3])
+        return rot.as_quat()  # Returns [x, y, z, w]
 
 
 def add_text_to_image(
