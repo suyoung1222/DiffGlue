@@ -361,7 +361,8 @@ class GaussianDiffusion:
         return t
 
     def p_sample(
-        self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None
+        self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None,
+        geometry_guidance=None, geometry_weight=0.0
     ):
         """
         Sample x_{t-1} from the model at the given timestep.
@@ -374,6 +375,9 @@ class GaussianDiffusion:
             x_start prediction before it is used to sample.
         :param model_kwargs: if not None, a dict of extra keyword arguments to
             pass to the model. This can be used for conditioning.
+        :param geometry_guidance: if not None, epipolar gradient tensor [B, 1, N+1, M+1]
+            to guide the diffusion toward geometrically consistent matches.
+        :param geometry_weight: weight λ for geometry guidance (default 0.0 = no guidance).
         :return: a dict containing the following keys:
                  - 'sample': a random sample from the model.
                  - 'pred_xstart': a prediction of x_0.
@@ -386,13 +390,20 @@ class GaussianDiffusion:
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
         )
+        
+        # Apply geometry guidance: mean = mean - λ * ∇geo
+        # This pushes the sample toward lower epipolar error
+        mean = out["mean"]
+        if geometry_guidance is not None and geometry_weight > 0:
+            mean = mean - geometry_weight * geometry_guidance
+        
         noise = th.randn_like(x)
         # noise = 0.5 + th.randn_like(x_start)*0.1
         noise[...,-1,-1] = 0
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
-        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
+        sample = mean + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
         return {**out, "sample": sample}
 
     def p_sample_loop(
@@ -405,6 +416,8 @@ class GaussianDiffusion:
         model_kwargs=None,
         device=None,
         progress=False,
+        geometry_guidance_fn=None,
+        geometry_weight=0.0,
     ):
         """
         Generate samples from the model.
@@ -421,6 +434,8 @@ class GaussianDiffusion:
         :param device: if specified, the device to create the samples on.
                        If not specified, use a model parameter's device.
         :param progress: if True, show a tqdm progress bar.
+        :param geometry_guidance_fn: if not None, a callable for epipolar gradient.
+        :param geometry_weight: weight λ for geometry guidance.
         :return: a non-differentiable batch of samples.
         """
         final = None
@@ -433,6 +448,8 @@ class GaussianDiffusion:
             model_kwargs=model_kwargs,
             device=device,
             progress=progress,
+            geometry_guidance_fn=geometry_guidance_fn,
+            geometry_weight=geometry_weight,
         ):
             final = sample
         return final
@@ -447,12 +464,20 @@ class GaussianDiffusion:
         model_kwargs=None,
         device=None,
         progress=False,
+        geometry_guidance_fn=None,
+        geometry_weight=0.0,
     ):
         """
         Generate samples from the model and yield intermediate samples from
         each timestep of diffusion.
 
         Arguments are the same as p_sample_loop().
+        
+        Additional params:
+        :param geometry_guidance_fn: if not None, a callable(x_t, model_kwargs) -> gradient
+            that computes the epipolar gradient for geometry-guided diffusion.
+        :param geometry_weight: weight λ for geometry guidance.
+        
         Returns a generator over dicts, where each dict is the return value of
         p_sample().
         """
@@ -477,6 +502,11 @@ class GaussianDiffusion:
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
+                # Compute geometry guidance if function provided
+                geometry_guidance = None
+                if geometry_guidance_fn is not None and geometry_weight > 0:
+                    geometry_guidance = geometry_guidance_fn(adj_mat, model_kwargs)
+                
                 out = self.p_sample(
                     model,
                     adj_mat,
@@ -484,6 +514,8 @@ class GaussianDiffusion:
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     model_kwargs=model_kwargs,
+                    geometry_guidance=geometry_guidance,
+                    geometry_weight=geometry_weight,
                 )
                 yield out
                 adj_mat = out["sample"]
@@ -497,11 +529,18 @@ class GaussianDiffusion:
         denoised_fn=None,
         model_kwargs=None,
         eta=0.0,
+        geometry_guidance=None,
+        geometry_weight=0.0,
     ):
         """
         Sample x_{t-1} from the model using DDIM.
 
         Same usage as p_sample().
+        
+        Additional params:
+        :param geometry_guidance: if not None, epipolar gradient tensor [B, 1, N+1, M+1]
+            to guide the diffusion toward geometrically consistent matches.
+        :param geometry_weight: weight λ for geometry guidance (default 0.0 = no guidance).
         """
         out = self.p_mean_variance(
             model,
@@ -528,6 +567,12 @@ class GaussianDiffusion:
             out["pred_xstart"] * th.sqrt(alpha_bar_prev)
             + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
         )
+        
+        # Apply geometry guidance: mean = mean - λ * ∇geo
+        # This pushes the sample toward lower epipolar error
+        if geometry_guidance is not None and geometry_weight > 0:
+            mean_pred = mean_pred - geometry_weight * geometry_guidance
+        
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
@@ -583,11 +628,17 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=0.0,
+        geometry_guidance_fn=None,
+        geometry_weight=0.0,
     ):
         """
         Generate samples from the model using DDIM.
 
         Same usage as p_sample_loop().
+        
+        Additional params:
+        :param geometry_guidance_fn: if not None, a callable for epipolar gradient.
+        :param geometry_weight: weight λ for geometry guidance.
         """
         final = None
         for sample in self.ddim_sample_loop_progressive(
@@ -600,6 +651,8 @@ class GaussianDiffusion:
             device=device,
             progress=progress,
             eta=eta,
+            geometry_guidance_fn=geometry_guidance_fn,
+            geometry_weight=geometry_weight,
         ):
             final = sample
         return final
@@ -615,12 +668,19 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=0.0,
+        geometry_guidance_fn=None,
+        geometry_weight=0.0,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
         each timestep of DDIM.
 
         Same usage as p_sample_loop_progressive().
+        
+        Additional params:
+        :param geometry_guidance_fn: if not None, a callable(x_t, model_kwargs) -> gradient
+            that computes the epipolar gradient for geometry-guided diffusion.
+        :param geometry_weight: weight λ for geometry guidance.
         """
         if device is None:
             device = next(model.parameters()).device
@@ -643,6 +703,11 @@ class GaussianDiffusion:
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
+                # Compute geometry guidance if function provided
+                geometry_guidance = None
+                if geometry_guidance_fn is not None and geometry_weight > 0:
+                    geometry_guidance = geometry_guidance_fn(adj_mat, model_kwargs)
+                
                 out = self.ddim_sample(
                     model,
                     adj_mat,
@@ -651,6 +716,8 @@ class GaussianDiffusion:
                     denoised_fn=denoised_fn,
                     model_kwargs=model_kwargs,
                     eta=eta,
+                    geometry_guidance=geometry_guidance,
+                    geometry_weight=geometry_weight,
                 )
                 yield out
                 adj_mat = out["sample"]

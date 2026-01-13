@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1" #0,1
+os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1, 2, 3" # "0" #"0, 1" #0,1
 
 import argparse
 import copy
@@ -14,7 +14,17 @@ import pdb
 import numpy as np
 import torch
 from omegaconf import OmegaConf
-from torch.cuda.amp import GradScaler, autocast
+# PyTorch 2.2+ compatible imports
+try:
+    from torch.amp import GradScaler as _GradScaler
+    from torch.amp import autocast as _autocast
+    # PyTorch 2.2+ requires device_type argument
+    def autocast(**kwargs):
+        return _autocast(device_type='cuda', **kwargs)
+    def GradScaler(**kwargs):
+        return _GradScaler('cuda', **kwargs)
+except ImportError:
+    from torch.cuda.amp import GradScaler, autocast  # PyTorch <2.2
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -78,6 +88,8 @@ default_train_conf = OmegaConf.create(default_train_conf)
 @torch.no_grad()
 def do_evaluation(model, loader, device, loss_fn, conf, pbar=True):
     model.eval()
+    print("[DEBUG EVAL] Starting evaluation...")
+    import sys; sys.stdout.flush()
     results = {}
     pr_metrics = defaultdict(PRMetric)
     figures = []
@@ -87,9 +99,18 @@ def do_evaluation(model, loader, device, loss_fn, conf, pbar=True):
     for i, data in enumerate(
         tqdm(loader, desc="Evaluation", ascii=True, disable=not pbar)
     ):
+        if i < 2:
+            print(f"[DEBUG EVAL i={i}] Loading batch...")
+            import sys; sys.stdout.flush()
         data = batch_to_device(data, device, non_blocking=True)
+        if i < 2:
+            print(f"[DEBUG EVAL i={i}] Starting model forward...")
+            import sys; sys.stdout.flush()
         with torch.no_grad():
             pred = model(data)
+            if i < 2:
+                print(f"[DEBUG EVAL i={i}] Forward done, computing loss...")
+                import sys; sys.stdout.flush()
             losses, metrics = loss_fn(pred, data) # TODO: add pose estimation precision metric
             if conf.plot is not None and i in plot_ids:
                 figures.append(locate(plot_fn)(pred, data))
@@ -296,7 +317,10 @@ def training(rank, conf, output_dir, args):
         model.load_state_dict(init_cp["model"], strict=False)
     if args.distributed:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device])
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], find_unused_parameters=True)
+        # Enable static graph for DDP to work with gradient checkpointing
+        # This tells DDP that the computation graph structure doesn't change between iterations
+        model._set_static_graph()
     if rank == 0 and args.print_arch:
         logger.info(f"Model: \n{model}")
 
@@ -361,6 +385,47 @@ def training(rank, conf, output_dir, args):
     while epoch < conf.train.epochs and not stop:
         if rank == 0:
             logger.info(f"Starting epoch {epoch}")
+        
+        # Update epoch for warmup-based training mode switching
+        # Supports gradual transition from DSM to unrolled GGDM training
+        base_model = model.module if args.distributed else model
+        if hasattr(base_model, 'set_epoch'):
+            base_model.set_epoch(epoch)
+        
+        # Check for gradual unfreezing after warmup
+        # This unfreezes the LoFTR backbone with a lower learning rate
+        refinement_conf = conf.model.get("refinement", {})
+        warmup_epochs = refinement_conf.get("warmup_epochs", 0)
+        unfreeze_after_warmup = refinement_conf.get("unfreeze_backbone_after_warmup", False)
+        
+        if (
+            unfreeze_after_warmup 
+            and epoch == warmup_epochs 
+            and warmup_epochs > 0
+            and hasattr(base_model, 'matcher') 
+            and hasattr(base_model.matcher, 'backbone')
+        ):
+            # Unfreeze backbone
+            backbone = base_model.matcher.backbone
+            for param in backbone.parameters():
+                param.requires_grad = True
+            
+            # Add backbone to optimizer with lower learning rate
+            backbone_lr_factor = refinement_conf.get("backbone_lr_factor", 0.1)
+            base_lr = optimizer.param_groups[0]["lr"]
+            backbone_lr = base_lr * backbone_lr_factor
+            
+            backbone_params = list(backbone.parameters())
+            optimizer.add_param_group({
+                "params": backbone_params,
+                "lr": backbone_lr,
+                "name": "backbone"
+            })
+            
+            if rank == 0:
+                logger.info(f"[Epoch {epoch}] Unfreezing LoFTR backbone after warmup")
+                logger.info(f"  - Backbone LR: {backbone_lr:.2e} (factor: {backbone_lr_factor})")
+                logger.info(f"  - Added {len(backbone_params)} backbone parameters to optimizer")
 
         # we first run the eval
         if (
@@ -418,11 +483,20 @@ def training(rank, conf, output_dir, args):
             model.train()
             optimizer.zero_grad()
 
+            if it < 3:  # Debug first 3 iterations
+                print(f"[DEBUG it={it}] Starting forward pass...")
+                import sys; sys.stdout.flush()
+            
             with autocast(enabled=args.mixed_precision is not None, dtype=mp_dtype):
                 data = batch_to_device(data, device, non_blocking=True)
                 pred = model(data)
                 losses, _ = loss_fn(pred, data)
                 loss = torch.mean(losses["total"]) # TODO: 여기 pred에 Esti_T0to1 있음
+            
+            if it < 3:
+                print(f"[DEBUG it={it}] Forward + loss done, loss={loss.item():.4f}")
+                import sys; sys.stdout.flush()
+            
             if torch.isnan(loss).any():
                 print(f"Detected NAN, skipping iteration {it}")
                 del pred, data, loss, losses
@@ -436,7 +510,13 @@ def training(rank, conf, output_dir, args):
                 )
                 do_backward = do_backward > 0
             if do_backward:
+                if it < 3:
+                    print(f"[DEBUG it={it}] Starting backward...")
+                    import sys; sys.stdout.flush()
                 scaler.scale(loss).backward()
+                if it < 3:
+                    print(f"[DEBUG it={it}] Backward done!")
+                    import sys; sys.stdout.flush()
                 if args.detect_anomaly:
                     # Check for params without any gradient which causes
                     # problems in distributed training with checkpointing
@@ -462,6 +542,9 @@ def training(rank, conf, output_dir, args):
                 else:
                     scaler.step(optimizer)
                     scaler.update()
+                if it < 3:
+                    print(f"[DEBUG it={it}] Optimizer step done!")
+                    import sys; sys.stdout.flush()
                 if not conf.train.lr_schedule.on_epoch:
                     lr_scheduler.step()
             else:
@@ -493,6 +576,10 @@ def training(rank, conf, output_dir, args):
                     )
                     writer.add_scalar("training/epoch", epoch, tot_n_samples)
 
+            if it < 3:
+                print(f"[DEBUG it={it}] Logging done, checking grad logging...")
+                import sys; sys.stdout.flush()
+            
             if conf.train.log_grad_every_iter is not None:
                 if it % conf.train.log_grad_every_iter == 0:
                     grad_txt = ""
@@ -506,17 +593,35 @@ def training(rank, conf, output_dir, args):
                             norm = torch.norm(param.grad.detach(), 2)
                             grad_txt += f"{name} {norm.item():.3f}  \n"
                     writer.add_text("grad/summary", grad_txt, tot_n_samples)
+            
+            if it < 3:
+                print(f"[DEBUG it={it}] Deleting pred/data...")
+                import sys; sys.stdout.flush()
+            
             del pred, data, #loss, losses
 
+            if it < 3:
+                print(f"[DEBUG it={it}] Checking validation condition...")
+                import sys; sys.stdout.flush()
+
             # Run validation
-            if (
+            # Use --no_eval_0 flag to skip validation at iteration 0
+            run_val = (
                 (
                     it % conf.train.eval_every_iter == 0
                     and (it > 0 or epoch == -int(args.no_eval_0))
                 )
                 or stop
                 or it == (len(train_loader) - 1)
-            ):
+            )
+            if it < 3:
+                print(f"[DEBUG it={it}] run_val={run_val}, eval_every_iter={conf.train.eval_every_iter}")
+                import sys; sys.stdout.flush()
+            
+            if run_val:
+                if it < 3:
+                    print(f"[DEBUG it={it}] Starting validation...")
+                    import sys; sys.stdout.flush()
                 with fork_rng(seed=conf.train.seed):
                     results, pr_metrics, figures = do_evaluation(
                         model,
@@ -524,7 +629,7 @@ def training(rank, conf, output_dir, args):
                         device,
                         loss_fn,
                         conf.train,
-                        pbar=(rank == -1),
+                        pbar=(rank == 0),  # Show progress bar on main process
                     )
 
                 if rank == 0:
@@ -571,7 +676,7 @@ def training(rank, conf, output_dir, args):
                         device,
                         loss_fn,
                         conf.train,
-                        pbar=(rank == -1),
+                        pbar=(rank == 0),  # Show progress bar on main process
                     )
                     best_eval = results[conf.train.best_key]
                 best_eval = save_experiment(
@@ -588,6 +693,10 @@ def training(rank, conf, output_dir, args):
                     stop,
                     args.distributed,
                 )
+
+            if it < 3:
+                print(f"[DEBUG it={it}] Iteration complete, moving to next...")
+                import sys; sys.stdout.flush()
 
             if stop:
                 break

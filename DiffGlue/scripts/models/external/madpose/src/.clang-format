@@ -1,0 +1,13 @@
+BasedOnStyle: LLVM
+
+# To keep parameters aligned when they don't fit on a single line
+AlignAfterOpenBracket: Align
+
+ColumnLimit: 120  
+FixNamespaceComments: true
+IndentWidth: 4
+PointerAlignment: Right
+TabWidth: 4
+UseTab: Never
+SortIncludes: true
+IncludeBlocks: Regroup

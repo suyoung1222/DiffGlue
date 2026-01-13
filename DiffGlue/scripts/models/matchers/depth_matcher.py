@@ -1,5 +1,11 @@
 import torch
 
+# PyTorch 2.2+ compatible custom_fwd decorator
+try:
+    _custom_fwd = torch.amp.custom_fwd(device_type='cuda', cast_inputs=torch.float32)
+except (AttributeError, TypeError):
+    _custom_fwd = torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
+
 from ...geometry.gt_generation import (
     gt_line_matches_from_pose_depth,
     gt_matches_from_pose_depth,
@@ -37,7 +43,7 @@ class DepthMatcher(BaseModel):
                 "valid_lines1",
             ]
 
-    @torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
+    @_custom_fwd
     def _forward(self, data):
         result = {}
         if self.conf.use_points:

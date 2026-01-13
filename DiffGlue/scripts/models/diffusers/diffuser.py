@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional, Callable
 import numpy as np
 import torch as th
 
@@ -152,22 +152,42 @@ class SpacedDiffusion(GaussianDiffusion):
     ):  # pylint: disable=signature-differs
         return super().training_losses(self._wrap_model(model), *args, **kwargs)
 
-    def sample(self, model, cond=None):
+    def sample(
+        self, 
+        model, 
+        cond=None,
+        geometry_guidance_fn: Optional[Callable] = None,
+        geometry_weight: float = 0.0,
+    ):
+        """
+        Sample from the diffusion model.
+        
+        Args:
+            model: the denoising model
+            cond: conditioning dict with 'data' key
+            geometry_guidance_fn: optional callable(x_t, model_kwargs) -> gradient
+                for geometry-guided sampling
+            geometry_weight: weight λ for geometry guidance
+        """
         if cond is None:
             cond = {}
         sample_fn = (
             self.p_sample_loop if not self.conf.use_ddim else self.ddim_sample_loop
         )
+        shape = (
+            cond["data"]["keypoints0"].shape[0], 
+            1, 
+            cond["data"]["keypoints0"].shape[1]+1, 
+            cond["data"]["keypoints1"].shape[1]+1
+        )
+        
         sample = sample_fn(
             model,
-            (cond["data"]["keypoints0"].shape[0], 1, cond["data"]["keypoints0"].shape[1]+1, cond["data"]["keypoints1"].shape[1]+1),
+            shape,
             clip_denoised=self.conf.clip_denoised,
             model_kwargs=cond,
-        ) if not self.conf.use_ddim else sample_fn(
-            model,
-            (cond["data"]["keypoints0"].shape[0], 1, cond["data"]["keypoints0"].shape[1]+1, cond["data"]["keypoints1"].shape[1]+1),
-            clip_denoised=self.conf.clip_denoised,
-            model_kwargs=cond,
+            geometry_guidance_fn=geometry_guidance_fn,
+            geometry_weight=geometry_weight,
         )
         sample["sample"] = sample["sample"].contiguous()
         return sample
@@ -184,8 +204,26 @@ class SpacedDiffusion(GaussianDiffusion):
         return t
     
     def __call__(
-        self, model, pred
+        self, 
+        model, 
+        pred,
+        geometry_guidance_fn: Optional[Callable] = None,
+        geometry_weight: float = 0.0,
     ):  # pylint: disable=signature-differs
+        """
+        Forward pass for diffusion.
+        
+        Args:
+            model: the denoising model (DiffGlue/matcher)
+            pred: prediction dict containing gt_matches, keypoints, etc.
+            geometry_guidance_fn: optional callable(x_t, model_kwargs) -> gradient
+                for geometry-guided diffusion. Should return [B, 1, N+1, M+1] tensor.
+            geometry_weight: weight λ for geometry guidance (default 0.0 = disabled)
+        
+        Returns:
+            dict with diffuser outputs including 'diffuser_loss' during training
+            or 'sample' during inference.
+        """
         if model.training:
             self.training = True
             self.schedule_sampler = create_named_schedule_sampler(self.conf.schedule_sampler, self)
@@ -206,12 +244,20 @@ class SpacedDiffusion(GaussianDiffusion):
                 "model_kwargs": {"data": pred},
                 "noise": None,
             }
+            # Note: geometry guidance is typically used during inference/sampling,
+            # not during training_losses which computes the denoising loss.
+            # However, we pass it here for potential future use.
             results = self.training_losses(model, *args, **kwargs) # "loss", "vb"
             results["diffuser_loss"] = results["diffuser_loss"]*weights
             return results
         else:
             self.training = False
-            return self.sample(model, cond={"data": pred})
+            return self.sample(
+                model, 
+                cond={"data": pred},
+                geometry_guidance_fn=geometry_guidance_fn,
+                geometry_weight=geometry_weight,
+            )
 
     def loss(self, pred, data): # L_diff
         if self.training:

@@ -13,12 +13,12 @@ data:
     num_overlap_bins: 3
     read_depth: true
     read_image: true
-    batch_size: 1 #16
-    num_workers: 8
+    batch_size: 8
+    num_workers: 4  # Set to 0 to avoid multiprocessing deadlocks
     load_features:
-        do: false  # enable this if you have cached predictions
-        path: exports/megadepth-undist-depth-r1024_SP-k2048-nms3/{scene}.h5
-        padding_length: 4096 #2048
+        do: true  # enable this if you have cached predictions
+        path: exports/megadepth-undist-depth-r1024_SP-k1024-nms3/{scene}.h5
+        padding_length: 1024 #2048
         padding_fn: pad_local_features
 model:
     name: two_view_pipeline
@@ -40,6 +40,11 @@ model:
         epipolar: enabled
         epi_weight: 1.0
         matcher_loss_weight: 0.1
+        # LoFTR pretrained weights - faster convergence by reusing LoFTR's learned features
+        # Download with: python scripts/download_loftr_weights.py
+        loftr_pretrained: outdoor_ds.ckpt  # Uses LoFTR outdoor weights for backbone + coarse matching
+        freeze_loftr_backbone: false  # freeze ResNetFPN backbone (use true for fine-tuning)
+        freeze_loftr_coarse: false    # freeze LoFTR transformer + coarse matching
     ground_truth:
         name: matchers.depth_matcher
         th_positive: 3
@@ -62,6 +67,38 @@ model:
         clip_denoised: True
         diffuser_loss_weight: 1
         scale: 2
+    # GGDM: Geometry-Guided Alternating Transformer-Diffusion Matching (Algorithm 1)
+    # This implements geometry-guided iterative refinement between diffusion and LoFTR
+    #
+    # TRAINING MODES (Section 3.7 of method):
+    #   1. Standard DSM (unrolled_training=false): Train score network only
+    #   2. Unrolled GGDM (unrolled_training=true): End-to-end through K iterations
+    #      - Adds L_match and L_pose losses on M_K
+    #      - Model learns to use geometry feedback
+    #
+    # INFERENCE: Always uses full GGDM loop when num_refinement_iters > 1
+    refinement:
+        num_refinement_iters: 1        # K iterations (1 = no loop, >1 = GGDM)
+        use_geometry_guidance: false   # Enable epipolar gradient injection in diffusion
+        geometry_guidance_weight: 0.1  # λ(t) - weight for geometry gradient: s^guided = s - λ*g
+        feedback_to_loftr: false       # Feed refined matches back to LoFTR: S_k ← TransformerHead(bias=B^k)
+        feedback_scale: 0.5            # γ - scale for B^(k) = γ log(M̃_k + ε)
+        geometry_error_type: "sampson" # "sampson" or "symmetric" for SampsonMap(E; C)
+        min_matches_for_E: 8           # Minimum matches for Weighted8Point
+        top_k_candidates: 500          # k for TopKCandidates(M, k)
+        reliability_threshold: 0.1     # Threshold for IsReliable(E, M) check
+        init_from_previous: true       # x_T ← InitFrom(M_{k-1}) vs random noise
+        # Unrolled training options (Section 3.7)
+        unrolled_training: false       # If true: backprop through K iters with L_match + L_pose
+        unrolled_k: 2                  # Number of iterations to unroll during training (keep small!)
+        unrolled_t: 4                  # Number of diffusion steps to unroll (keep small!)
+        loss_match_weight: 1.0         # λ_match for L_match = -log M_K(i,j)
+        loss_pose_weight: 0.1          # λ_pose for L_pose = angle(R, R_gt) + angle(t, t_gt)
+        # Warmup: start with DSM, then switch to unrolled GGDM
+        warmup_epochs: 0               # Number of epochs with standard DSM before unrolled (0 = no warmup)
+        # Gradual unfreezing: unfreeze LoFTR backbone after warmup for e2e fine-tuning
+        unfreeze_backbone_after_warmup: false
+        backbone_lr_factor: 0.1        # Backbone LR = main_LR * factor (lower to prevent forgetting)
     allow_no_extract: True
 train:
     seed: 0

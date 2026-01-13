@@ -1,0 +1,38 @@
+Loading conda version miniforge3-24.7.1
+Loading cuda version 12.1
+[01/06/2026 08:28:49 scripts INFO] Starting experiment SP+DiffGlue_megadepth_detecterfree_ggdm_80_2_fast
+[01/06/2026 08:29:05 scripts INFO] Restoring from previous training of SP+DiffGlue_megadepth_detecterfree_ggdm_80_2_fast
+[01/06/2026 08:29:05 scripts INFO] Restoring from checkpoint checkpoint_3_17500.tar
+[01/06/2026 08:29:05 scripts INFO] Restoring from previous training of SP+DiffGlue_megadepth_detecterfree_ggdm_80_2_fast
+[01/06/2026 08:29:05 scripts INFO] Restoring from checkpoint checkpoint_3_17500.tar
+Traceback (most recent call last):
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 791, in <module>
+    torch.multiprocessing.spawn(
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 246, in spawn
+    return start_processes(fn, args, nprocs, join, daemon, start_method="spawn")
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 202, in start_processes
+    while not context.join():
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 163, in join
+    raise ProcessRaisedException(msg, error_index, failed_process.pid)
+torch.multiprocessing.spawn.ProcessRaisedException: 
+
+-- Process 0 terminated with the following error:
+Traceback (most recent call last):
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 74, in _wrap
+    fn(i, *args)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 730, in main_worker
+    training(rank, conf, output_dir, args)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 221, in training
+    best_cp = torch.load(str(best_cp), map_location="cpu")
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/serialization.py", line 986, in load
+    with _open_file_like(f, 'rb') as opened_file:
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/serialization.py", line 435, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/serialization.py", line 416, in __init__
+    super().__init__(open(name, mode))
+FileNotFoundError: [Errno 2] No such file or directory: '/project/pi_hzhang2_umass_edu/suyoungkang_umass_edu/diffglue_data/outputs/training/SP+DiffGlue_megadepth_detecterfree_ggdm_80_2_fast/checkpoint_best.tar'
+

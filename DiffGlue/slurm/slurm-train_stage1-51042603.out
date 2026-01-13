@@ -1,0 +1,70 @@
+Loading conda version miniforge3-24.7.1
+Loading cuda version 12.1
+[01/08/2026 16:17:14 scripts INFO] Starting experiment SP+DiffGlue_megadepth_detecterfree_ggdm_80_2_fast
+[01/08/2026 16:17:27 scripts INFO] Restoring from previous training of SP+DiffGlue_megadepth_detecterfree_ggdm_80_2_fast
+[01/08/2026 16:17:27 scripts INFO] Restoring from checkpoint checkpoint_10_59000.tar
+[01/08/2026 16:17:27 scripts INFO] Restoring from previous training of SP+DiffGlue_megadepth_detecterfree_ggdm_80_2_fast
+[01/08/2026 16:17:27 scripts INFO] Restoring from checkpoint checkpoint_10_59000.tar
+[01/08/2026 16:18:48 scripts INFO] Training in distributed mode with 2 GPUs
+[01/08/2026 16:18:48 scripts INFO] Training in distributed mode with 2 GPUs
+[01/08/2026 16:18:48 scripts INFO] Using device 0
+[01/08/2026 16:18:49 scripts INFO] Using device 1
+[01/08/2026 16:18:55 scripts.datasets.base_dataset INFO] Creating dataset MegaDepth
+[01/08/2026 16:18:55 scripts.datasets.base_dataset INFO] Creating dataset MegaDepth
+[01/08/2026 16:19:23 scripts.datasets.megadepth INFO] Sampling new train data with seed 0.
+[01/08/2026 16:19:23 scripts.datasets.megadepth INFO] Sampling new train data with seed 0.
+[01/08/2026 16:24:01 scripts.datasets.megadepth INFO] Sampling new val data with seed 0.
+[01/08/2026 16:24:01 scripts.datasets.megadepth INFO] Sampling new val data with seed 0.
+[01/08/2026 16:24:02 scripts INFO] Training loader has 2868 batches
+[01/08/2026 16:24:02 scripts INFO] Validation loader has 188 batches
+/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/nn/parallel/distributed.py:2214: UserWarning: You passed find_unused_parameters=true to DistributedDataParallel, `_set_static_graph` will detect unused parameters automatically, so you do not need to set find_unused_parameters=true, just be sure these unused parameters will not change during training loop while calling `_set_static_graph`.
+  warnings.warn(
+/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/nn/parallel/distributed.py:2214: UserWarning: You passed find_unused_parameters=true to DistributedDataParallel, `_set_static_graph` will detect unused parameters automatically, so you do not need to set find_unused_parameters=true, just be sure these unused parameters will not change during training loop while calling `_set_static_graph`.
+  warnings.warn(
+[01/08/2026 16:24:06 scripts INFO] Parameters with scaled learning rate:
+{}
+[01/08/2026 16:24:06 scripts INFO] Parameters with scaled learning rate:
+{}
+[01/08/2026 16:24:06 scripts INFO] Training with mixed_precision=bfloat16
+[01/08/2026 16:24:06 scripts INFO] Training with mixed_precision=bfloat16
+[DiffGlue] Loading LoFTR weights from: /work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/models/matchers/LoFTR/weights/outdoor_ds.ckpt
+[DiffGlue] Loaded LoFTR pretrained weights:
+  - backbone: 91 parameters
+  - loftr_coarse: 80 parameters
+[DiffGlue] Froze backbone (ResNetFPN)
+[DiffGlue] Loading LoFTR weights from: /work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/models/matchers/LoFTR/weights/outdoor_ds.ckpt
+[DiffGlue] Loaded LoFTR pretrained weights:
+  - backbone: 91 parameters
+  - loftr_coarse: 80 parameters
+[DiffGlue] Froze backbone (ResNetFPN)
+Traceback (most recent call last):
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 791, in <module>
+    torch.multiprocessing.spawn(
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 246, in spawn
+    return start_processes(fn, args, nprocs, join, daemon, start_method="spawn")
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 202, in start_processes
+    while not context.join():
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 163, in join
+    raise ProcessRaisedException(msg, error_index, failed_process.pid)
+torch.multiprocessing.spawn.ProcessRaisedException: 
+
+-- Process 1 terminated with the following error:
+Traceback (most recent call last):
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/multiprocessing/spawn.py", line 74, in _wrap
+    fn(i, *args)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 732, in main_worker
+    training(rank, conf, output_dir, args)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/train.py", line 359, in training
+    optimizer.load_state_dict(init_cp["optimizer"])
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/_compile.py", line 24, in inner
+    return torch._dynamo.disable(fn, recursive)(*args, **kwargs)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/_dynamo/eval_frame.py", line 328, in _fn
+    return fn(*args, **kwargs)
+  File "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/.conda/envs/ggdm/lib/python3.9/site-packages/torch/optim/optimizer.py", line 730, in load_state_dict
+    raise ValueError("loaded state dict has a different number of "
+ValueError: loaded state dict has a different number of parameter groups
+

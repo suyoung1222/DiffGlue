@@ -168,8 +168,9 @@ class BaseDataset(metaclass=ABCMeta):
             sampler = None
             if shuffle is None:
                 shuffle = split == "train" and self.conf.shuffle_training
-        return DataLoader(
-            dataset,
+        # prefetch_factor can only be used when num_workers > 0
+        loader_kwargs = dict(
+            dataset=dataset,
             batch_size=batch_size,
             shuffle=shuffle,
             sampler=sampler,
@@ -177,9 +178,11 @@ class BaseDataset(metaclass=ABCMeta):
             collate_fn=collate,
             num_workers=num_workers,
             worker_init_fn=worker_init_fn,
-            prefetch_factor=self.conf.prefetch_factor,
             drop_last=True if split == "train" else False,
         )
+        if num_workers > 0 and self.conf.prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = self.conf.prefetch_factor
+        return DataLoader(**loader_kwargs)
 
     def get_overfit_loader(self, split):
         """Return an overfit data loader.

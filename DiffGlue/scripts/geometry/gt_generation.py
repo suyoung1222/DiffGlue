@@ -89,7 +89,7 @@ def gt_matches_from_pose_depth(
         exclude1 = epi_dist.min(-2).values > neg_th
         m0 = torch.where((~valid0) & exclude0, ignore.new_tensor(-1), m0)
         m1 = torch.where((~valid1) & exclude1, ignore.new_tensor(-1), m1)
-
+ 
     return {
         "assignment": positive,
         "reward": (dist < pos_th**2).float() - (epi_dist > neg_th).float(),

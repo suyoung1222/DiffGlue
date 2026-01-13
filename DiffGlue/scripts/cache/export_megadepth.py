@@ -11,8 +11,8 @@ from ..models import get_model
 from ..settings import DATA_PATH
 from ..utils.export_predictions import export_predictions
 
-resize = 1024
-n_kpts = 2048
+resize = 768  # 1024
+n_kpts = 576 # 1024 # 2048
 configs = {
     "sp": {
         "name": f"r{resize}_SP-k{n_kpts}-nms3",

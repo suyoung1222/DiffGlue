@@ -30,7 +30,13 @@ FLASH_AVAILABLE = hasattr(F, "scaled_dot_product_attention")
 torch.backends.cudnn.deterministic = True
 
 
-@torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
+# PyTorch 2.2+ compatible custom_fwd
+try:
+    _custom_fwd = torch.amp.custom_fwd(device_type='cuda', cast_inputs=torch.float32)
+except (AttributeError, TypeError):
+    _custom_fwd = torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
+
+@_custom_fwd
 def normalize_keypoints(
     kpts: torch.Tensor, size: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
@@ -680,9 +686,13 @@ class DiffGlue_old(nn.Module):
         all_desc0, all_desc1 = [], []
 
         for i in range(self.conf.n_layers):
+            # NOTE: Checkpointing works for DiffGlue_old because it uses a simpler
+            # LocalFeatureEncoder backbone instead of LoFTR. The computation graph
+            # is shallow enough that checkpointing doesn't cause issues.
             if self.conf.checkpointed and self.training:
                 desc0, desc1 = checkpoint(
-                    self.transformers[i], desc0, desc1, encoding0, encoding1, time_embd, adj_mat_fore[...,:-1,:-1]
+                    self.transformers[i], desc0, desc1, encoding0, encoding1, time_embd, adj_mat_fore[...,:-1,:-1],
+                    use_reentrant=False  # Required for DDP compatibility
                 )
             else:
                 desc0, desc1 = self.transformers[i](desc0, desc1, encoding0, encoding1, time_embd, adj_mat_fore[...,:-1,:-1])
@@ -746,31 +756,41 @@ class DiffGlue_old(nn.Module):
         losses = {"matcher_total": nll, "last": nll.clone().detach(), **loss_metrics}
 
         if self.training:
-            losses["confidence"] = 0.0
+            # Initialize as tensor on the same device as nll to avoid mixing Python floats with tensors
+            losses["confidence"] = torch.zeros_like(nll)
 
-        losses["row_norm"] = pred["log_assignment"].exp()[:, :-1].sum(2).mean(1)
+        # row_norm is only for logging, detach to avoid unnecessary computation graph
+        losses["row_norm"] = pred["log_assignment"].exp()[:, :-1].sum(2).mean(1).detach()
 
         if self.training:
             #L_match
+            # Accumulate losses in a list to avoid in-place operations that can cause issues with checkpointing
+            loss_terms = [nll]
+            confidence_terms = []
+            
             for i in range(N):
                 params_i = loss_params(pred, i)
-                nll, _, _ = self.loss_fn(params_i, data, weights=gt_weights)
+                nll_i, _, _ = self.loss_fn(params_i, data, weights=gt_weights)
 
                 if self.conf.loss.gamma > 0.0:
                     weight = self.conf.loss.gamma ** (N - i)
                 else:
                     weight = i + 1
                 sum_weights += weight
-                losses["matcher_total"] = losses["matcher_total"] + nll * weight
+                loss_terms.append(nll_i * weight)
 
-                losses["confidence"] += self.token_confidence[i].loss(
+                confidence_terms.append(self.token_confidence[i].loss(
                     pred["ref_descriptors0"][:, i],
                     pred["ref_descriptors1"][:, i],
                     params_i["log_assignment"],
                     pred["log_assignment"],
-                ) / (N)
+                ) / (N))
 
                 del params_i
+
+            # Sum all loss terms at once (more efficient and avoids in-place ops that can hang with checkpointing)
+            losses["matcher_total"] = torch.stack(loss_terms).sum(0)
+            losses["confidence"] = torch.stack(confidence_terms).sum(0) if confidence_terms else torch.zeros_like(nll)
 
             #L_epipolar
             if "T_0to1" in data:
@@ -785,7 +805,8 @@ class DiffGlue_old(nn.Module):
                 ) # kpts0, kpts1, matches0, T0to1, cam0, cam1, weight=1.0
                 losses["geometry"] = L_epi # * self.conf.epi_weight
             else:
-                losses["geometry"] = 0.0
+                # Use tensor zero instead of Python float to avoid type mixing issues
+                losses["geometry"] = torch.zeros_like(nll)
 
         losses["matcher_total"] /= sum_weights
         # confidences
@@ -813,6 +834,10 @@ class DiffGlue(nn.Module):
         "checkpointed": False,
         "weights": None,  # either a path or the name of pretrained weights (disk, ...)
         "weights_from_version": "v0.1_arxiv",
+        # LoFTR pretrained weights - for initializing backbone and coarse matching
+        "loftr_pretrained": None,  # path to LoFTR checkpoint (e.g., "outdoor_ds.ckpt")
+        "freeze_loftr_backbone": False,  # freeze ResNetFPN backbone
+        "freeze_loftr_coarse": False,  # freeze LocalFeatureTransformer + CoarseMatching
         "loss": {
             "gamma": 1.0,
             "fn": "nll",
@@ -869,6 +894,21 @@ class DiffGlue(nn.Module):
 
         self.loss_fn = NLLLoss(conf.loss)
 
+        # Load pretrained LoFTR weights for backbone and coarse matching components
+        if conf.loftr_pretrained is not None:
+            self._load_loftr_pretrained(conf.loftr_pretrained)
+        
+        # Freeze LoFTR components if requested
+        if conf.freeze_loftr_backbone:
+            self._freeze_module(self.backbone)
+            print("[DiffGlue] Froze backbone (ResNetFPN)")
+        
+        if conf.freeze_loftr_coarse:
+            self._freeze_module(self.pos_encoding)
+            self._freeze_module(self.loftr_coarse)
+            self._freeze_module(self.coarse_matching)
+            print("[DiffGlue] Froze pos_encoding, loftr_coarse, coarse_matching")
+
         state_dict = None
         if conf.weights is not None:
             # weights can be either a path or an existing file from official LG
@@ -889,6 +929,145 @@ class DiffGlue(nn.Module):
                 pattern = f"cross_attn.{i}", f"transformers.{i}.cross_attn"
                 state_dict = {k.replace(*pattern): v for k, v in state_dict.items()}
             self.load_state_dict(state_dict, strict=False)
+    
+    def _load_loftr_pretrained(self, ckpt_path: str):
+        """
+        Load pretrained LoFTR weights into DiffGlue's LoFTR-derived components.
+        
+        This loads weights for:
+        - backbone (ResNetFPN)
+        - pos_encoding (PositionEncodingSine)
+        - loftr_coarse (LocalFeatureTransformer)
+        - coarse_matching (CoarseMatching)
+        
+        Args:
+            ckpt_path: Path to LoFTR checkpoint (e.g., "outdoor_ds.ckpt")
+        """
+        # Try multiple possible paths
+        possible_paths = [
+            Path(ckpt_path),
+            Path(DATA_PATH) / ckpt_path,
+            Path(__file__).parent / "LoFTR" / "weights" / ckpt_path,
+        ]
+        
+        loftr_ckpt = None
+        for p in possible_paths:
+            if p.exists():
+                loftr_ckpt = torch.load(str(p), map_location="cpu")
+                print(f"[DiffGlue] Loading LoFTR weights from: {p}")
+                break
+        
+        if loftr_ckpt is None:
+            # Try to auto-download
+            loftr_ckpt = self._auto_download_loftr(ckpt_path)
+            if loftr_ckpt is None:
+                print(f"[DiffGlue] Warning: Could not find or download LoFTR checkpoint '{ckpt_path}'")
+                print(f"[DiffGlue] Run: python scripts/download_loftr_weights.py")
+                return
+        
+        # LoFTR checkpoints have 'state_dict' key
+        if "state_dict" in loftr_ckpt:
+            loftr_state = loftr_ckpt["state_dict"]
+        else:
+            loftr_state = loftr_ckpt
+        
+        # Map LoFTR keys to DiffGlue keys
+        # LoFTR uses: matcher.backbone.*, matcher.pos_encoding.*, etc.
+        # We need: backbone.*, pos_encoding.*, etc.
+        
+        loaded_components = {
+            "backbone": 0,
+            "pos_encoding": 0,
+            "loftr_coarse": 0,
+            "coarse_matching": 0,
+        }
+        
+        diffglue_state = self.state_dict()
+        
+        for loftr_key, loftr_param in loftr_state.items():
+            # Remove common prefixes from LoFTR checkpoint
+            key = loftr_key
+            for prefix in ["matcher.", "model."]:
+                if key.startswith(prefix):
+                    key = key[len(prefix):]
+            
+            # Check if this key belongs to our target components
+            for component in loaded_components:
+                if key.startswith(component + "."):
+                    if key in diffglue_state:
+                        if diffglue_state[key].shape == loftr_param.shape:
+                            diffglue_state[key] = loftr_param
+                            loaded_components[component] += 1
+                        else:
+                            print(f"[DiffGlue] Shape mismatch for {key}: "
+                                  f"{diffglue_state[key].shape} vs {loftr_param.shape}")
+                    break
+        
+        # Load the updated state dict
+        self.load_state_dict(diffglue_state, strict=False)
+        
+        # Print summary
+        print(f"[DiffGlue] Loaded LoFTR pretrained weights:")
+        for comp, count in loaded_components.items():
+            if count > 0:
+                print(f"  - {comp}: {count} parameters")
+    
+    def _freeze_module(self, module: nn.Module):
+        """Freeze all parameters in a module."""
+        for param in module.parameters():
+            param.requires_grad = False
+    
+    def _auto_download_loftr(self, ckpt_name: str):
+        """
+        Auto-download LoFTR weights if not found locally.
+        
+        Args:
+            ckpt_name: Name of the checkpoint file (e.g., "outdoor_ds.ckpt")
+        
+        Returns:
+            Loaded checkpoint dict, or None if download failed
+        """
+        # Google Drive file IDs for LoFTR weights
+        gdrive_ids = {
+            "outdoor_ds.ckpt": "1M-VD35-qdB5Iw-AtbDBCKC7hPolFW9UY",
+            "indoor_ds.ckpt": "1w1Qhea3WLRMS81Vod_k5rxS_GNRgIi-O",
+        }
+        
+        if ckpt_name not in gdrive_ids:
+            print(f"[DiffGlue] Unknown checkpoint '{ckpt_name}', cannot auto-download")
+            return None
+        
+        # Determine output path
+        output_dir = Path(__file__).parent / "LoFTR" / "weights"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / ckpt_name
+        
+        print(f"[DiffGlue] Auto-downloading LoFTR weights '{ckpt_name}'...")
+        
+        try:
+            import gdown
+        except ImportError:
+            print("[DiffGlue] Installing gdown for auto-download...")
+            import subprocess
+            import sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown", "-q"])
+            import gdown
+        
+        try:
+            file_id = gdrive_ids[ckpt_name]
+            url = f"https://drive.google.com/uc?id={file_id}"
+            gdown.download(url, str(output_path), quiet=False)
+            
+            if output_path.exists():
+                size_mb = output_path.stat().st_size / (1024 * 1024)
+                print(f"[DiffGlue] ✓ Downloaded {ckpt_name} ({size_mb:.1f} MB)")
+                return torch.load(str(output_path), map_location="cpu")
+            else:
+                print(f"[DiffGlue] ✗ Download failed for {ckpt_name}")
+                return None
+        except Exception as e:
+            print(f"[DiffGlue] ✗ Auto-download failed: {e}")
+            return None
 
     def compile(self, mode="reduce-overhead"):
         if self.conf.width_confidence != -1:
@@ -911,6 +1090,10 @@ class DiffGlue(nn.Module):
 
         for key in self.required_data_keys:
             assert key in data, f"Missing key {key} in data"
+        
+        # Get attention bias from alternating refinement loop (if provided)
+        # This allows feeding refined match distributions back to LoFTR
+        attention_bias = data.get("_attention_bias", None)
             
         # # Off the shelf (superpoint)
         # kpts0_old, kpts1_old = data["keypoints0"], data["keypoints1"]
@@ -966,8 +1149,8 @@ class DiffGlue(nn.Module):
             mask_c0, mask_c1 = data['mask0'].flatten(-2), data['mask1'].flatten(-2)
         feat_c0, feat_c1 = self.loftr_coarse(feat_c0, feat_c1, mask_c0, mask_c1)
 
-        # 3. match coarse-level
-        self.coarse_matching(feat_c0, feat_c1, data, mask_c0=mask_c0, mask_c1=mask_c1)     
+        # 3. match coarse-level with optional attention bias from refinement loop
+        self.coarse_matching(feat_c0, feat_c1, data, mask_c0=mask_c0, mask_c1=mask_c1, attention_bias=attention_bias)     
 
 
         kpts0, kpts1 = data["keypoints0"], data["keypoints1"]
@@ -1022,12 +1205,12 @@ class DiffGlue(nn.Module):
         all_desc0, all_desc1 = [], []
 
         for i in range(self.conf.n_layers): # Iteration Start
-            if self.conf.checkpointed and self.training:
-                desc0, desc1 = checkpoint(
-                    self.transformers[i], desc0, desc1, encoding0, encoding1, time_embd, adj_mat_fore[...,:-1,:-1]
-                )
-            else:
-                desc0, desc1 = self.transformers[i](desc0, desc1, encoding0, encoding1, time_embd, adj_mat_fore[...,:-1,:-1])
+            # NOTE: Checkpointing is disabled because it causes backward pass to hang
+            # when matcher is called from diffuser. The diffuser's training_losses() calls
+            # matcher.forward() which creates nested autograd contexts that deadlock.
+            # To re-enable, set use_checkpoint = self.conf.checkpointed and self.training
+            # and ensure checkpointing works with your diffuser setup.
+            desc0, desc1 = self.transformers[i](desc0, desc1, encoding0, encoding1, time_embd, adj_mat_fore[...,:-1,:-1])
             if self.training or i == self.conf.n_layers - 1:
                 all_desc0.append(desc0)
                 all_desc1.append(desc1)
@@ -1088,31 +1271,41 @@ class DiffGlue(nn.Module):
         losses = {"matcher_total": nll, "last": nll.clone().detach(), **loss_metrics}
 
         if self.training:
-            losses["confidence"] = 0.0
+            # Initialize as tensor on the same device as nll to avoid mixing Python floats with tensors
+            losses["confidence"] = torch.zeros_like(nll)
 
-        losses["row_norm"] = pred["log_assignment"].exp()[:, :-1].sum(2).mean(1)
+        # row_norm is only for logging, detach to avoid unnecessary computation graph
+        losses["row_norm"] = pred["log_assignment"].exp()[:, :-1].sum(2).mean(1).detach()
 
         if self.training:
             #L_match
+            # Accumulate losses in a list to avoid in-place operations that can cause issues with checkpointing
+            loss_terms = [nll]
+            confidence_terms = []
+            
             for i in range(N):
                 params_i = loss_params(pred, i)
-                nll, _, _ = self.loss_fn(params_i, data, weights=gt_weights)
+                nll_i, _, _ = self.loss_fn(params_i, data, weights=gt_weights)
 
                 if self.conf.loss.gamma > 0.0:
                     weight = self.conf.loss.gamma ** (N - i)
                 else:
                     weight = i + 1
                 sum_weights += weight
-                losses["matcher_total"] = losses["matcher_total"] + nll * weight
+                loss_terms.append(nll_i * weight)
 
-                losses["confidence"] += self.token_confidence[i].loss(
+                confidence_terms.append(self.token_confidence[i].loss(
                     pred["ref_descriptors0"][:, i],
                     pred["ref_descriptors1"][:, i],
                     params_i["log_assignment"],
                     pred["log_assignment"],
-                ) / (N)
+                ) / (N))
 
                 del params_i
+
+            # Sum all loss terms at once (more efficient and avoids in-place ops that can hang with checkpointing)
+            losses["matcher_total"] = torch.stack(loss_terms).sum(0)
+            losses["confidence"] = torch.stack(confidence_terms).sum(0) if confidence_terms else torch.zeros_like(nll)
 
             #L_epipolar
             if "T_0to1" in data:
@@ -1127,7 +1320,8 @@ class DiffGlue(nn.Module):
                 ) # kpts0, kpts1, matches0, T0to1, cam0, cam1, weight=1.0
                 losses["geometry"] = L_epi # * self.conf.epi_weight
             else:
-                losses["geometry"] = 0.0
+                # Use tensor zero instead of Python float to avoid type mixing issues
+                losses["geometry"] = torch.zeros_like(nll)
 
         losses["matcher_total"] /= sum_weights
         # confidences
