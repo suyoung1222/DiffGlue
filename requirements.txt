@@ -13,6 +13,7 @@ respace==0.1.1
 scipy
 seaborn==0.13.2
 setuptools==68.0.0
+tabulate
 torch==2.0.1
 torchvision==0.15.2
 tqdm==4.66.1
