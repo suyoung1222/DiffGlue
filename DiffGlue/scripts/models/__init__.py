@@ -1,7 +1,22 @@
 import importlib.util
+import sys
+from pathlib import Path
 
-from ..utils.tools import get_class
-from .base_model import BaseModel
+# Handle both relative and absolute imports
+try:
+    from ..utils.tools import get_class
+except ImportError:
+    # Fallback to absolute import when run as script
+    script_dir = Path(__file__).parent.parent
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
+    from utils.tools import get_class
+
+try:
+    from .base_model import BaseModel
+except ImportError:
+    # Fallback to absolute import when run as script
+    from models.base_model import BaseModel
 
 
 def get_model(name):
