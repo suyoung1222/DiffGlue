@@ -181,11 +181,21 @@ DiffGlue/data_su/
 DiffGlue/sbatch_*.txt
 *.sbatch
 /slurm
+*.ts
 
 # Model weights and checkpoints
 DiffGlue/scripts/models/weights/*.tar
 DiffGlue/scripts/models/weights/hypers/*.tar
 DiffGlue/scripts/models/covisnet/weights/*.ts
+*.ts
+
+# SLURM log files
+DiffGlue/slurm/*.out
+slurm/*.out
+*.out
+
+# Large numpy arrays
+*.npy
 
 # Dataset files
 DiffGlue/scripts/datasets/straight_bag/*.db3
