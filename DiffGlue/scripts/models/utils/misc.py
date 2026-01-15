@@ -1,7 +1,8 @@
 import math
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 import torch
+import torch.nn.functional as F
 
 
 def to_sequence(map):
@@ -68,3 +69,45 @@ def pad_and_stack(
 
     y = torch.stack([pad_to_length(x, length, pad_dim, **kwargs) for x in sequences], 0)
     return y
+
+
+def align_image_pair_sizes(
+    img0: torch.Tensor, 
+    img1: torch.Tensor,
+    hw0: Tuple[int, int],
+    hw1: Tuple[int, int]
+) -> Tuple[torch.Tensor, torch.Tensor, Tuple[int, int]]:
+    """
+    Align two images to the same size by padding smaller image(s) to match the maximum size.
+    This prevents FPN dimension mismatches when processing images of different sizes.
+    
+    Args:
+        img0: First image tensor [B, C, H0, W0]
+        img1: Second image tensor [B, C, H1, W1]
+        hw0: Height and width of first image (H0, W0)
+        hw1: Height and width of second image (H1, W1)
+    
+    Returns:
+        img0_aligned: Padded first image [B, C, max_H, max_W]
+        img1_aligned: Padded second image [B, C, max_H, max_W]
+        aligned_hw: Aligned height and width (max_H, max_W)
+    """
+    if hw0 == hw1:
+        return img0, img1, hw0
+    
+    max_h = max(hw0[0], hw1[0])
+    max_w = max(hw0[1], hw1[1])
+    
+    # Pad img0 if needed
+    if img0.shape[2] < max_h or img0.shape[3] < max_w:
+        pad_h0 = max_h - img0.shape[2]
+        pad_w0 = max_w - img0.shape[3]
+        img0 = F.pad(img0, (0, pad_w0, 0, pad_h0), mode='constant', value=0)
+    
+    # Pad img1 if needed
+    if img1.shape[2] < max_h or img1.shape[3] < max_w:
+        pad_h1 = max_h - img1.shape[2]
+        pad_w1 = max_w - img1.shape[3]
+        img1 = F.pad(img1, (0, pad_w1, 0, pad_h1), mode='constant', value=0)
+    
+    return img0, img1, (max_h, max_w)

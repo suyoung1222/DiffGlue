@@ -67,6 +67,15 @@ def parse_eval_args(benchmark, args, configs_path, default=None):
     if default:
         conf = OmegaConf.merge(default, conf)
 
+    # Handle detector_free flag: disable extractor to use raw images directly
+    if hasattr(args, 'detector_free') and args.detector_free:
+        if "model" not in conf:
+            conf["model"] = {}
+        if "extractor" not in conf["model"]:
+            conf["model"]["extractor"] = {}
+        conf["model"]["extractor"]["name"] = None
+        print("Detector-free mode: SuperPoint extractor disabled, using raw images directly")
+
     if args.tag is not None:
         name = args.tag
     elif args.conf and conf.checkpoint:
@@ -77,6 +86,8 @@ def parse_eval_args(benchmark, args, configs_path, default=None):
         name = conf.checkpoint
     if len(args.dotlist) > 0 and not args.tag:
         name = name + "_" + ":".join(args.dotlist)
+    if hasattr(args, 'detector_free') and args.detector_free and not args.tag:
+        name = name + "_detector_free"
     print("Running benchmark:", benchmark)
     print("Experiment tag:", name)
     print("Config:")
@@ -105,5 +116,7 @@ def get_eval_parser():
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--overwrite_eval", action="store_true")
     parser.add_argument("--plot", action="store_true")
+    parser.add_argument("--detector_free", action="store_true", 
+                       help="Disable SuperPoint extractor and use raw images directly")
     parser.add_argument("dotlist", nargs="*")
     return parser

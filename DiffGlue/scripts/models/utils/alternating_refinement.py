@@ -33,8 +33,10 @@ geometry (epipolar constraint), converging to geometrically consistent matches.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms.functional as TF
 from typing import Optional, Dict, Callable, Tuple
 from functools import partial
+from einops import rearrange
 
 from .geometry_guidance import (
     GeometryGuidance,
@@ -44,6 +46,7 @@ from .geometry_guidance import (
     build_K_matrix,
     decompose_essential_matrix,
 )
+from .misc import align_image_pair_sizes
 
 
 class AlternatingRefinement(nn.Module):
@@ -145,6 +148,96 @@ class AlternatingRefinement(nn.Module):
         if not self.unrolled_training:
             return False
         return self._current_epoch >= self._warmup_epochs
+    
+    def _populate_keypoints_from_loftr(self, matcher, data: Dict):
+        """
+        Populate keypoints0, keypoints1, descriptors0, descriptors1 in data dict
+        by running only the LoFTR coarse matching part (backbone + transformer + matching).
+        This avoids running the full DiffGlue transformer which requires proper adj_mat.
+        
+        Args:
+            matcher: DiffGlue matcher instance
+            data: data dict that will be updated with keypoints/descriptors
+        """
+        # Ensure images are in the right format
+        if "view0" not in data or "view1" not in data:
+            return  # Can't proceed without images
+        
+        # Create a deep copy of data to avoid modifying the original
+        import copy
+        temp_data = copy.deepcopy(data)
+        
+        # Run only the LoFTR part (backbone + coarse matching) without the DiffGlue transformers
+        # This is the same logic as in matcher.forward() but stops before transformers
+        
+        # 1. Local Feature CNN
+        temp_data.update({
+            'bs': temp_data["view0"]["image"].size(0),
+            'hw0_i': temp_data["view0"]["image"].shape[2:], 
+            'hw1_i': temp_data["view1"]["image"].shape[2:]
+        })
+        
+        # Convert to grayscale
+        if temp_data["view0"]["image"].shape[1] == 3:
+            temp_data["view0"]["image"] = TF.rgb_to_grayscale(
+                temp_data["view0"]["image"], num_output_channels=1
+            )
+        if temp_data["view1"]["image"].shape[1] == 3:
+            temp_data["view1"]["image"] = TF.rgb_to_grayscale(
+                temp_data["view1"]["image"], num_output_channels=1
+            )
+        
+        # Align image sizes
+        temp_data["view0"]["image"], temp_data["view1"]["image"], aligned_hw = align_image_pair_sizes(
+            temp_data["view0"]["image"], 
+            temp_data["view1"]["image"], 
+            temp_data['hw0_i'], 
+            temp_data['hw1_i']
+        )
+        temp_data['hw0_i'] = temp_data['hw1_i'] = aligned_hw
+        
+        # Run backbone separately
+        (feat_c0, feat_f0) = matcher.backbone(temp_data['view0']['image'])
+        (feat_c1, feat_f1) = matcher.backbone(temp_data['view1']['image'])
+        
+        temp_data.update({
+            'hw0_c': feat_c0.shape[2:], 'hw1_c': feat_c1.shape[2:],
+            'hw0_f': feat_f0.shape[2:], 'hw1_f': feat_f1.shape[2:]
+        })
+        
+        # 2. Coarse-level LoFTR module
+        feat_c0 = rearrange(matcher.pos_encoding(feat_c0), 'n c h w -> n (h w) c')
+        feat_c1 = rearrange(matcher.pos_encoding(feat_c1), 'n c h w -> n (h w) c')
+        
+        mask_c0 = mask_c1 = None
+        if 'mask0' in temp_data:
+            mask_c0 = temp_data['mask0'].flatten(-2)
+            mask_c1 = temp_data['mask1'].flatten(-2)
+        
+        feat_c0, feat_c1 = matcher.loftr_coarse(feat_c0, feat_c1, mask_c0, mask_c1)
+        
+        # 3. Coarse matching (this populates keypoints and descriptors in temp_data)
+        attention_bias = temp_data.get("_attention_bias", None)
+        matcher.coarse_matching(
+            feat_c0, feat_c1, temp_data, 
+            mask_c0=mask_c0, mask_c1=mask_c1, 
+            attention_bias=attention_bias
+        )
+        
+        # Copy keypoints and descriptors back to original data dict
+        if "keypoints0" in temp_data:
+            data["keypoints0"] = temp_data["keypoints0"]
+        if "keypoints1" in temp_data:
+            data["keypoints1"] = temp_data["keypoints1"]
+        if "descriptors0" in temp_data:
+            data["descriptors0"] = temp_data["descriptors0"]
+        if "descriptors1" in temp_data:
+            data["descriptors1"] = temp_data["descriptors1"]
+        
+        # Also copy other useful metadata
+        for key in ['hw0_c', 'hw1_c', 'hw0_f', 'hw1_f', 'hw0_i', 'hw1_i', 'bs']:
+            if key in temp_data:
+                data[key] = temp_data[key]
     
     def extract_camera_intrinsics(self, data: Dict) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -536,6 +629,13 @@ class AlternatingRefinement(nn.Module):
         # INITIALIZATION (before main loop)
         # ============================================
         
+        # Ensure keypoints and descriptors are in data (for detector-free mode)
+        # The matcher needs to populate these from LoFTR coarse matching before diffuser can use them
+        if "keypoints0" not in data or "keypoints1" not in data:
+            # Populate keypoints/descriptors by running LoFTR coarse matching
+            # This is needed for detector-free mode where no extractor provides keypoints
+            self._populate_keypoints_from_loftr(matcher, data)
+        
         # Run initial forward to get M_0
         pred = diffuser(matcher, data)
         
@@ -561,6 +661,7 @@ class AlternatingRefinement(nn.Module):
             R, t = decompose_essential_matrix(E_k)
             pred["estimated_R"] = R
             pred["estimated_t"] = t
+            pred["refined_matches"] = M_k
             return pred
         
         # ============================================
@@ -662,7 +763,7 @@ class AlternatingRefinement(nn.Module):
         R, t = decompose_essential_matrix(E_k)
         pred["estimated_R"] = R
         pred["estimated_t"] = t
-        
+        pred["refined_matches"] = M_k
         return pred
     
     def forward_unrolled(

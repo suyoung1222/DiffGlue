@@ -82,13 +82,52 @@ def load_experiment(exper, conf={}, get_last=False, ckpt=None):
 
     state_dict = ckpt["model"]
     dict_params = set(state_dict.keys())
+    # Get both parameters and buffers from model
     model_params = set(map(lambda n: n[0], model.named_parameters()))
+    model_buffers = set(map(lambda n: n[0], model.named_buffers()))
+    model_all_keys = model_params | model_buffers
+    
+    # Filter out extractor keys from checkpoint if model doesn't have extractor (detector-free models)
+    model_has_extractor = any(k.startswith('extractor.') for k in model_all_keys)
+    checkpoint_has_extractor = any(k.startswith('extractor.') for k in state_dict.keys())
+    if checkpoint_has_extractor and not model_has_extractor:
+        extractor_keys = [k for k in state_dict.keys() if k.startswith('extractor.')]
+        logger.info(f"Filtering out {len(extractor_keys)} extractor parameters (detector-free model)")
+        state_dict = {k: v for k, v in state_dict.items() if not k.startswith('extractor.')}
+        dict_params = set(state_dict.keys())  # Update after filtering
+    
+    # Handle missing parameters (e.g., matcher.net. vs matcher.)
     diff = model_params - dict_params
     if len(diff) > 0:
         subs = os.path.commonprefix(list(diff)).rstrip(".")
         logger.warning(f"Missing {len(diff)} parameters in {subs}")
         state_dict = {k.replace('matcher.', 'matcher.net.'): v for k, v in state_dict.items()}
-    model.load_state_dict(state_dict, strict=True)
+        dict_params = set(state_dict.keys())  # Update after replacement
+    
+    # Filter out unexpected keys (keys in checkpoint but not in model)
+    unexpected_keys = dict_params - model_all_keys
+    if len(unexpected_keys) > 0:
+        logger.warning(f"Filtering out {len(unexpected_keys)} unexpected keys from checkpoint")
+        state_dict = {k: v for k, v in state_dict.items() if k in model_all_keys}
+    
+    # Check for missing keys (keys in model but not in checkpoint)
+    missing_keys = model_all_keys - set(state_dict.keys())
+    
+    # Check if missing keys are only BatchNorm buffers (running_mean, running_var)
+    # These are often missing when backbone is loaded from separate pretrained weights
+    missing_bn_buffers = {k for k in missing_keys if 'running_mean' in k or 'running_var' in k}
+    missing_non_bn = missing_keys - missing_bn_buffers
+    
+    # Use strict=False if only BatchNorm buffers are missing (common when backbone loaded separately)
+    strict_mode = len(missing_non_bn) == 0
+    
+    if len(missing_bn_buffers) > 0:
+        logger.info(f"Missing {len(missing_bn_buffers)} BatchNorm buffers (likely loaded from separate LoFTR weights), using strict=False")
+    if len(missing_non_bn) > 0:
+        logger.warning(f"Missing {len(missing_non_bn)} non-BatchNorm keys, using strict=False")
+        strict_mode = False
+    
+    model.load_state_dict(state_dict, strict=strict_mode)
     return model
 
 

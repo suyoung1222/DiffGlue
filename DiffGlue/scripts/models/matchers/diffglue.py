@@ -16,6 +16,7 @@ from ..utils.metrics import matcher_metrics
 from ..utils.net import timestep_embedding
 from ..utils.pose_utils import epipolar_loss, solve_pnp_ransac, sampson_epipolar_loss
 from ..utils.local_feature import dense_positions_and_descriptors, upsample_coords_to_image, select_topk_from_dense
+from ..utils.misc import align_image_pair_sizes
 
 from .LoFTR.src.loftr import default_cfg
 from .LoFTR.src.loftr.backbone import build_backbone
@@ -1128,11 +1129,19 @@ class DiffGlue(nn.Module):
         #     normalize=True
         # )
 
-        if data['hw0_i'] == data['hw1_i']:  # faster & better BN convergence
-            feats_c, feats_f = self.backbone(torch.cat([data['view0']['image'], data['view1']['image']], dim=0))
-            (feat_c0, feat_c1), (feat_f0, feat_f1) = feats_c.split(data['bs']), feats_f.split(data['bs'])
-        else:  # handle different input shapes
-            (feat_c0, feat_f0), (feat_c1, feat_f1) = self.backbone(data['view0']['image']), self.backbone(data['view1']['image'])
+        # Align image sizes by padding to avoid FPN dimension mismatches
+        data["view0"]["image"], data["view1"]["image"], aligned_hw = align_image_pair_sizes(
+            data["view0"]["image"], 
+            data["view1"]["image"], 
+            data['hw0_i'], 
+            data['hw1_i']
+        )
+        data['hw0_i'] = data['hw1_i'] = aligned_hw
+
+        # Process images separately to maintain batch size consistency
+        # Even when sizes match, process separately to avoid batch dimension confusion
+        (feat_c0, feat_f0) = self.backbone(data['view0']['image'])
+        (feat_c1, feat_f1) = self.backbone(data['view1']['image'])
 
         data.update({
             'hw0_c': feat_c0.shape[2:], 'hw1_c': feat_c1.shape[2:],
@@ -1150,9 +1159,12 @@ class DiffGlue(nn.Module):
         feat_c0, feat_c1 = self.loftr_coarse(feat_c0, feat_c1, mask_c0, mask_c1)
 
         # 3. match coarse-level with optional attention bias from refinement loop
+        # This adds to data: keypoints0, keypoints1, descriptors0, descriptors1
+        # - keypoints0/1: [B, L, 2] dense coarse grid positions in image coordinates
+        # - descriptors0/1: [B, L, C] LoFTR coarse features after transformer (feat_c0, feat_c1)
         self.coarse_matching(feat_c0, feat_c1, data, mask_c0=mask_c0, mask_c1=mask_c1, attention_bias=attention_bias)     
 
-
+        # Extract keypoints and descriptors from data (set by coarse_matching.get_contextual_match)
         kpts0, kpts1 = data["keypoints0"], data["keypoints1"]
         b, m, _ = kpts0.shape
         b, n, _ = kpts1.shape
@@ -1183,8 +1195,9 @@ class DiffGlue(nn.Module):
                 -1,
             )
 
-        desc0 = data["descriptors0"].contiguous()
-        desc1 = data["descriptors1"].contiguous()
+        # Extract descriptors from data (LoFTR coarse features set by coarse_matching.get_contextual_match)
+        desc0 = data["descriptors0"].contiguous()  # [B, L, C] - original LoFTR coarse descriptors
+        desc1 = data["descriptors1"].contiguous()  # [B, S, C] - original LoFTR coarse descriptors
 
         assert desc0.shape[-1] == self.conf.input_dim
         assert desc1.shape[-1] == self.conf.input_dim

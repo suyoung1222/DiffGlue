@@ -8,7 +8,7 @@ from ..geometry.homography import homography_corner_error, sym_homography_error
 from ..robust_estimators import load_estimator
 from ..utils.tensor import index_batch
 from ..utils.tools import AUCMetric
-
+import pdb
 
 def check_keys_recursive(d, pattern):
     if isinstance(pattern, dict):

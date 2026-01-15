@@ -355,6 +355,46 @@ def training(rank, conf, output_dir, args):
     results = None  # fix bug with it saving
 
     lr_scheduler = get_lr_scheduler(optimizer=optimizer, conf=conf.train.lr_schedule)
+    
+    # Handle unfreezing backbone when resuming from checkpoint
+    # This must happen BEFORE loading optimizer state to match parameter groups
+    if args.restore:
+        refinement_conf = conf.model.get("refinement", {})
+        warmup_epochs = refinement_conf.get("warmup_epochs", 0)
+        unfreeze_after_warmup = refinement_conf.get("unfreeze_backbone_after_warmup", False)
+        checkpoint_epoch = init_cp.get("epoch", 0)
+        
+        # If checkpoint was saved after warmup, backbone was already unfrozen
+        # We need to unfreeze it and add parameter group before loading optimizer state
+        if (
+            unfreeze_after_warmup 
+            and checkpoint_epoch >= warmup_epochs 
+            and warmup_epochs > 0
+        ):
+            base_model = model.module if args.distributed else model
+            if hasattr(base_model, 'matcher') and hasattr(base_model.matcher, 'backbone'):
+                # Unfreeze backbone
+                backbone = base_model.matcher.backbone
+                for param in backbone.parameters():
+                    param.requires_grad = True
+                
+                # Add backbone to optimizer with lower learning rate
+                backbone_lr_factor = refinement_conf.get("backbone_lr_factor", 0.1)
+                base_lr = optimizer.param_groups[0]["lr"]
+                backbone_lr = base_lr * backbone_lr_factor
+                
+                backbone_params = list(backbone.parameters())
+                optimizer.add_param_group({
+                    "params": backbone_params,
+                    "lr": backbone_lr,
+                    "name": "backbone"
+                })
+                
+                if rank == 0:
+                    logger.info(f"[Resume] Restoring unfrozen backbone state from checkpoint (epoch {checkpoint_epoch})")
+                    logger.info(f"  - Backbone LR: {backbone_lr:.2e} (factor: {backbone_lr_factor})")
+                    logger.info(f"  - Added {len(backbone_params)} backbone parameters to optimizer")
+    
     if args.restore:
         optimizer.load_state_dict(init_cp["optimizer"])
         if "lr_scheduler" in init_cp:
@@ -394,14 +434,21 @@ def training(rank, conf, output_dir, args):
         
         # Check for gradual unfreezing after warmup
         # This unfreezes the LoFTR backbone with a lower learning rate
+        # Skip if already unfrozen (e.g., when resuming from checkpoint)
         refinement_conf = conf.model.get("refinement", {})
         warmup_epochs = refinement_conf.get("warmup_epochs", 0)
         unfreeze_after_warmup = refinement_conf.get("unfreeze_backbone_after_warmup", False)
+        
+        # Check if backbone is already in optimizer (already unfrozen)
+        backbone_already_unfrozen = any(
+            pg.get("name") == "backbone" for pg in optimizer.param_groups
+        )
         
         if (
             unfreeze_after_warmup 
             and epoch == warmup_epochs 
             and warmup_epochs > 0
+            and not backbone_already_unfrozen
             and hasattr(base_model, 'matcher') 
             and hasattr(base_model.matcher, 'backbone')
         ):

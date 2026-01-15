@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 from . import gaussian_diffusion as gd
 from .gaussian_diffusion import GaussianDiffusion
 from .resample import create_named_schedule_sampler
-
+import pdb
 
 def space_timesteps(num_timesteps, section_counts):
     """
@@ -174,6 +174,15 @@ class SpacedDiffusion(GaussianDiffusion):
         sample_fn = (
             self.p_sample_loop if not self.conf.use_ddim else self.ddim_sample_loop
         )
+        
+        # Get keypoints from data to determine output shape
+        # In detector-free mode, these should be populated by LoFTR coarse matching
+        if "keypoints0" not in cond["data"] or "keypoints1" not in cond["data"]:
+            raise KeyError(
+                "keypoints0 and keypoints1 must be in data dict. "
+                "For detector-free mode, ensure LoFTR coarse matching has been run first."
+            )
+        
         shape = (
             cond["data"]["keypoints0"].shape[0], 
             1, 

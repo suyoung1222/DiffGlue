@@ -24,7 +24,14 @@ from .utils import eval_matches_epipolar, eval_poses, eval_relative_pose_robust,
 logger = logging.getLogger(__name__)
 
 
-class MegaDepth1500Pipeline(EvalPipeline):
+class MegaDepth1500GGDMPipeline(EvalPipeline):
+    """
+    MegaDepth-1500 evaluation pipeline for detector-free GGDM model.
+    
+    This pipeline is specifically designed for evaluating the Geometry-Guided
+    Diffusion Matching (GGDM) model in detector-free mode, where no keypoint
+    extractor (e.g., SuperPoint) is used. The model operates directly on raw images.
+    """
     default_conf = {
         "data": {
             "name": "image_pairs",
@@ -36,9 +43,20 @@ class MegaDepth1500Pipeline(EvalPipeline):
             },
         },
         "model": {
+            "extractor": {
+                "name": None,  # Detector-free: no keypoint extractor
+            },
             "ground_truth": {
                 "name": None,  # remove gt matches
-            }
+            },
+            # Ensure GGDM refinement is enabled
+            "refinement": {
+                "num_refinement_iters": 3,
+                "use_geometry_guidance": True,
+                "geometry_guidance_weight": 0.1,
+                "feedback_to_loftr": True,
+                "feedback_scale": 0.5,
+            },
         },
         "eval": {
             "estimator": "poselib",
@@ -46,19 +64,26 @@ class MegaDepth1500Pipeline(EvalPipeline):
         },
     }
 
+    # Export keys for detector-free model (no keypoint scores since no detector)
     export_keys = [
         "keypoints0",
         "keypoints1",
-        "keypoint_scores0",
-        "keypoint_scores1",
         "matches0",
         "matches1",
         "matching_scores0",
-        "matching_scores1"
+        "matching_scores1",
+        # GGDM-specific outputs
+        "estimated_E",
+        "estimated_R",
+        "estimated_t",
     ]
-    optional_export_keys = []
+    optional_export_keys = [
+        "keypoint_scores0",
+        "keypoint_scores1",
+    ]
 
     def _init(self, conf):
+        """Initialize the pipeline and download dataset if needed."""
         if not (DATA_PATH / "megadepth1500").exists():
             logger.info("Downloading the MegaDepth-1500 dataset.")
             url = "https://cvg-data.inf.ethz.ch/megadepth/megadepth1500.zip"
@@ -68,6 +93,16 @@ class MegaDepth1500Pipeline(EvalPipeline):
             with zipfile.ZipFile(zip_path) as fid:
                 fid.extractall(DATA_PATH)
             zip_path.unlink()
+        
+        # Ensure detector-free mode is enabled
+        if conf.model.get("extractor", {}).get("name") is not None:
+            logger.warning(
+                "Detector-free mode: Overriding extractor.name to None. "
+                "GGDM detector-free model does not use keypoint extractors."
+            )
+            if "extractor" not in conf.model:
+                conf.model["extractor"] = {}
+            conf.model["extractor"]["name"] = None
 
     @classmethod
     def get_dataloader(self, data_conf=None):
@@ -84,6 +119,10 @@ class MegaDepth1500Pipeline(EvalPipeline):
                 model = load_model(self.conf.model, self.conf.checkpoint)
                 print("checkpoint: ")
                 print(self.conf.checkpoint)
+            
+            # Ensure model is in eval mode and detector-free
+            model.eval()
+            
             export_predictions(
                 self.get_dataloader(self.conf.data),
                 model,
@@ -105,11 +144,14 @@ class MegaDepth1500Pipeline(EvalPipeline):
         pose_results = defaultdict(lambda: defaultdict(list))
         pose_results_dlt = defaultdict(lambda: defaultdict(list))
         cache_loader = CacheLoader({"path": str(pred_file), "collate": None}).eval()
-        # pdb.set_trace()
+        
         for i, data in enumerate(tqdm(loader)):
-            pred = (data)
-            # add custom evacache_loaderluations here
+            pred = cache_loader(data)
+            
+            # Evaluate matches (epipolar error)
             results_i = eval_matches_epipolar(data, pred)
+            
+            # Evaluate pose estimation with different RANSAC thresholds
             for th in test_thresholds:
                 pose_results_i = eval_relative_pose_robust(
                     data,
@@ -125,7 +167,7 @@ class MegaDepth1500Pipeline(EvalPipeline):
                 )
                 [pose_results_dlt[th][k].append(v) for k, v in pose_results_i_dlt.items()]
 
-            # we also store the names for later reference
+            # Store metadata
             results_i["names"] = data["name"][0]
             if "scene" in data.keys():
                 results_i["scenes"] = data["scene"][0]
@@ -133,8 +175,7 @@ class MegaDepth1500Pipeline(EvalPipeline):
             for k, v in results_i.items():
                 results[k].append(v)
 
-        # summarize results as a dict[str, float]
-        # you can also add your custom evaluations here
+        # Summarize results as a dict[str, float]
         summaries = {}
         for k, v in results.items():
             arr = np.array(v)
@@ -142,6 +183,7 @@ class MegaDepth1500Pipeline(EvalPipeline):
                 continue
             summaries[f"m{k}"] = round(np.mean(arr), 3)
 
+        # Find best threshold and compute pose metrics
         best_pose_results, best_th = eval_poses(
             pose_results, auc_ths=[5, 10, 20], key="rel_pose_error"
         )
@@ -157,8 +199,7 @@ class MegaDepth1500Pipeline(EvalPipeline):
             **best_pose_results_dlt,
         }
 
-
-
+        # Generate visualization figures
         figures = {
             "pose_recall": plot_cumulative(
                 {self.conf.eval.estimator: results["rel_pose_error"]},
@@ -174,17 +215,13 @@ class MegaDepth1500Pipeline(EvalPipeline):
             )
         }
 
-        # if "Esti_T_0to1" in pred:
-        #     print("######Estimated Pose: ", pred["Esti_T_0to1"])
-        # else:
-        #     print("###### no Esti!!!!")
-
         return summaries, figures, results
 
 
 import random
 
 def set_seed(seed):
+    """Set random seed for reproducibility."""
     random.seed(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -200,9 +237,9 @@ if __name__ == "__main__":
     parser = get_eval_parser()
     args = parser.parse_intermixed_args()
 
-    default_conf = OmegaConf.create(MegaDepth1500Pipeline.default_conf)
+    default_conf = OmegaConf.create(MegaDepth1500GGDMPipeline.default_conf)
 
-    # mingle paths
+    # Setup output directory
     output_dir = Path(EVAL_PATH, dataset_name)
     output_dir.mkdir(exist_ok=True, parents=True)
 
@@ -213,12 +250,20 @@ if __name__ == "__main__":
         default_conf,
     )
 
+    # Force detector-free mode for GGDM
+    if "model" not in conf:
+        conf["model"] = {}
+    if "extractor" not in conf["model"]:
+        conf["model"]["extractor"] = {}
+    conf["model"]["extractor"]["name"] = None
+    print("GGDM Detector-free mode: Using raw images directly (no keypoint extractor)")
+
     experiment_dir = output_dir / name
     experiment_dir.mkdir(exist_ok=True)
 
     set_seed(0)
 
-    pipeline = MegaDepth1500Pipeline(conf)
+    pipeline = MegaDepth1500GGDMPipeline(conf)
     s, f, r = pipeline.run(
         experiment_dir,
         overwrite=args.overwrite,
@@ -233,4 +278,13 @@ if __name__ == "__main__":
         plt.show()
 
 
-# python -m scripts.eval.megadepth1500 --conf ggdm-official --checkpoint /project/pi_hzhang2_umass_edu/suyoungkang_umass_edu/diffglue_data/outputs/training/SP+DiffGlue_megadepth_detecterfree_ggdm_80_2/checkpoint_27_155500.tar --overwrite --detector_free
+# Example usage:
+# python -m scripts.eval.megadepth1500_ggdm --conf ggdm-official --checkpoint /path/to/checkpoint.tar --overwrite
+# 
+# Or with custom config:
+# python -m scripts.eval.megadepth1500_ggdm \
+#     --conf superpoint+diffglue_megadepth_ggdm \
+#     --checkpoint /path/to/checkpoint.tar \
+#     --overwrite \
+#     model.refinement.num_refinement_iters=3 \
+#     model.refinement.use_geometry_guidance=true

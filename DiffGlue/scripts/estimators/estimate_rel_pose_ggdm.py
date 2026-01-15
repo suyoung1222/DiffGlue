@@ -18,7 +18,7 @@ matcher_config = {
         "keypoint_threshold": 0.0005,  # 0.005,
         "max_keypoints": 1024,
         "ckpt": Path(__file__).parent.parent
-        / "/project/pi_hzhang2_umass_edu/suyoungkang_umass_edu/diffglue_data/outputs/training/SP+DiffGlue_megadepth_detecterfree_ggdm_80_2/checkpoint_best.tar",
+        / "/project/pi_hzhang2_umass_edu/suyoungkang_umass_edu/diffglue_data/outputs/training/SP+DiffGlue_megadepth_detecterfree_ggdm_80_2/checkpoint_best.pth",
         # "ckpt" : Path("/home/suyoung/Documents/limo/agilex_open_class/limo/limo_gazebo_sim/scripts/models/weights/SP_DiffGlue.tar")
     },
 }
