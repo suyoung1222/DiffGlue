@@ -169,6 +169,7 @@ cython_debug/
 # large files
 data/
 outputs/
+scripts/datasets/
 *.tar
 *.gz
 *.pt
