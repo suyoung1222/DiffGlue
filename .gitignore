@@ -194,7 +194,7 @@ DiffGlue/scripts/models/covisnet/weights/*.ts
 DiffGlue/slurm/*.out
 slurm/*.out
 *.out
-
+logs/
 # Large numpy arrays
 *.npy
 

@@ -16,35 +16,35 @@ defaults:
 
 leader:
   name: "Limo 1"
-  images: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo1_images"
-  odoms: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo1_pose.txt"
-  depths: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo1_depths"
+  images: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo1_images"
+  odoms: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo1_pose.txt"
+  depths: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo1_depths"
   image: ${defaults.image}
   depth: ${defaults.depth}
 
 followers:
   - name: "Limo 2"
-    images: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo2_images"
-    depths: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo2_depths"
-    odoms: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo2_pose.txt"
+    images: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo2_images"
+    depths: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo2_depths"
+    odoms: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo2_pose.txt"
     image: ${defaults.image}
     depth: ${defaults.depth}
   - name: "Limo 3"
-    images: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo3_images"
-    depths: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo3_depths"
-    odoms: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo3_pose.txt"
+    images: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo3_images"
+    depths: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo3_depths"
+    odoms: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo3_pose.txt"
     image: ${defaults.image}
     depth: ${defaults.depth}
   - name: "Limo 4"
-    images: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo4_images"
-    depths: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo4_depths"
-    odoms: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo4_pose.txt"
+    images: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo4_images"
+    depths: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo4_depths"
+    odoms: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo4_pose.txt"
     image: ${defaults.image}
     depth: ${defaults.depth}
   - name: "Limo 5"
-    images: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo5_images"
-    depths: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo5_depths"
-    odoms: "/work/pi_hzhang2_umass_edu/suyoungkang_umass_edu/Git/DiffGlue/DiffGlue/scripts/datasets/straight_bag/limo5_pose.txt"
+    images: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo5_images"
+    depths: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo5_depths"
+    odoms: "/home/suyoung/mydata/icra2025_dataset/straight_bag/limo5_pose.txt"
     image: ${defaults.image}
     depth: ${defaults.depth}
 
@@ -62,15 +62,15 @@ estimators:
   # e0_dino_vits16:
   #   module: estimators.estimate_rel_pose_diffglue_dino
   #   func: estimate_relative_pose
-  covisnet:
-    module: estimators.estimate_rel_pose_covisnet
-    func: estimate_relative_pose
-  orb_bf:
-    module: estimators.estimate_rel_pose_orb_bf
-    func: estimate_relative_pose
+  # covisnet:
+  #   module: estimators.estimate_rel_pose_covisnet
+  #   func: estimate_relative_pose
+  # orb_bf:
+  #   module: estimators.estimate_rel_pose_orb_bf
+  #   func: estimate_relative_pose
   # lightglue:
   #   module: estimators.estimate_rel_pose_lightglue
   #   func: estimate_relative_pose
-  superglue:
-    module: estimators.estimate_rel_pose_superglue
-    func: estimate_relative_pose
+  # superglue:
+  #   module: estimators.estimate_rel_pose_superglue
+  #   func: estimate_relative_pose

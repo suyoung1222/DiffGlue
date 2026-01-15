@@ -7,6 +7,7 @@ import numpy as np
 import torch
 # from madpose.utils import get_depths
 from models.classic_matcher.bfmatching import BFMatching
+# from models.detector_free_matcher.detectorfreematching import DetectorFreeMatching
 import time
 
 # LightGlue + SuperPoint
@@ -486,6 +487,21 @@ def estimate_relative_pose(
         matched_kpts_l = kpts_l[valid_mask]
         matching_scores = pred['matching_scores0'][valid_mask]
         print(f"number of Valid matches: {len(matched_kpts_f)}")
+
+    elif isinstance(matcher, DetectorFreeMatching):  # classic matcher (ORB + BFMatcher)
+        start_time = time.time()
+        pred = matcher({"image0": follower_img, "image1": leader_img})
+        # end_time = time.time()
+        kpts_f = pred["keypoints0"]  # (N,2)
+        kpts_l = pred["keypoints1"]  # (N,2)
+        matches = pred["matches0"]
+        
+        valid_mask = matches > -1
+        matched_kpts_f = kpts_f[valid_mask]
+        matched_kpts_l = kpts_l[valid_mask]
+        matching_scores = pred['matching_scores0'][valid_mask]
+        print(f"number of Valid matches: {len(matched_kpts_f)}")
+
     else:  # learning based matcher (glue)
         start_time = time.time()
         pred = matcher({"image0": inp_f, "image1": inp_l})
