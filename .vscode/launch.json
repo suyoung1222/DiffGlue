@@ -1,32 +1,65 @@
 {
     "version": "0.2.0",
     "configurations": [
+      
+      {
+        "name": "Debug eval_vis.py",
+        "type": "python",
+        "request": "launch",
+        "program": "${workspaceFolder}/DiffGlue/scripts/eval_vis.py",
+        "console": "integratedTerminal",
+        "cwd": "${workspaceFolder}/DiffGlue/scripts",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/DiffGlue/scripts:${env:PYTHONPATH}"
+        },
+        "args": [
+          "--conf", "configs/viz.yaml",
+          "--checkpoint", "/home/suyoung/mydata/Diffglue/weights/checkpoint_best_ggdm_80_2.tar",
+          "--save-frames", "logs",
+          "--viz",
+        ],
+        "justMyCode": false
+      },
       {
         "name": "Debug DiffGlue Training",
         "type": "python",
         "request": "launch",
-        "module": "scripts.train", //"scripts.eval.megadepth1500", //"scripts.train_deb",
+        "module": "scripts.train",
+        "console": "integratedTerminal",
+        "cwd": "${workspaceFolder}/DiffGlue",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/DiffGlue:${env:PYTHONPATH}"
+        },
         "args": [
           // Traqining stage1
           // "SP+DiffGlue_homography", 
           // "--conf", "scripts/configs/superpoint+diffglue_homography.yaml", 
           // "--run_benchmarks",
           // Training stage2
-          "SP+DiffGlue_megadepth",
-          "--conf", "scripts/configs/superpoint+diffglue_megadepth_e1.yaml",
-          "train.load_experiment=SP+DiffGlue_homography",
-          "data.load_features.do=True"
-          // Testing
-          // "--conf", "superpoint+diffglue-official",
-          // "--checkpoint", "/project/pi_hzhang2_umass_edu/suyoungkang_umass_edu/diffglue_data/outputs/training/SP+DiffGlue_megadepth/checkpoint_best.tar"
+          // "SP+DiffGlue_megadepth_ggdm_db",
+          // "--conf scripts/configs/superpoint+diffglue_megadepth_ggdm.yaml",
+          // "train.load_experiment=SP+DiffGlue_homography",
+          // "data.load_features.do=True",
+          // "data.batch_size=1"
         ],
-        "justMyCode": false,
+        "justMyCode": false
+      },
+      {
+        "name": "Debug MegaDepth1500 GGDM Evaluation",
+        "type": "python",
+        "request": "launch",
+        "module": "scripts.eval.megadepth1500_ggdm",
         "console": "integratedTerminal",
         "cwd": "${workspaceFolder}/DiffGlue",
         "env": {
-          "PYTHONPATH": "${workspaceFolder}/DiffGlue"
-        }
+          "PYTHONPATH": "${workspaceFolder}/DiffGlue:${env:PYTHONPATH}"
+        },
+        "args": [
+          "--conf", "superpoint+diffglue_megadepth_ggdm",
+          "--checkpoint", "${env:HOME}/mydata/Diffglue/weights/SP_DiffGlue.tar",
+          "--overwrite"
+        ],
+        "justMyCode": false
       }
     ]
   }
-  

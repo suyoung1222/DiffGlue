@@ -9,13 +9,13 @@ Default: SuperPoint with nearest neighbor matching.
 Convention for the matches: m0[i] is the index of the keypoint in image 1
 that corresponds to the keypoint i in image 0. m0[i] = -1 if i is unmatched.
 """
-
+import torch
 from omegaconf import OmegaConf
 
 from . import get_model
 from .base_model import BaseModel
 from .utils.alternating_refinement import create_alternating_refinement
-
+import pdb
 to_ctr = OmegaConf.to_container  # convert DictConfig to dict
 
 
@@ -127,6 +127,7 @@ class TwoViewPipeline(BaseModel):
         return pred_i
 
     def _forward(self, data):
+        # pdb.set_trace()
         pred0 = self.extract_view(data, "0")
         pred1 = self.extract_view(data, "1")
         pred = {
@@ -170,6 +171,13 @@ class TwoViewPipeline(BaseModel):
             pred = {**pred, **self.filter({**data, **pred})}
         if self.conf.solver.name:
             pred = {**pred, **self.solver({**data, **pred})}
+
+        # pdb.set_trace()
+# pred.keys()
+# dict_keys(['matches0', 'matches1', 'matching_scores0', 'matching_scores1', 
+# 'ref_descriptors0', 'ref_descriptors1', 'log_assignment', 'keypoints0', 'keypoints1', 
+# 'descriptors0', 'descriptors1', 'mean', 'variance', 'log_variance', 'pred_xstart', 'sample', 
+# 'estimated_E', 'estimated_R', 'estimated_t', 'refined_matches'])
         return pred
 
     def loss(self, pred, data):
@@ -268,33 +276,29 @@ class TwoViewPipeline(BaseModel):
             
             # Compute rotation error (in degrees)
             # Using trace formula: cos(θ) = (trace(R_rel) - 1) / 2
-            B = R_est.shape[0]
-            R_rel = torch.bmm(R_est, R_gt.transpose(-1, -2))
-            trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(-1)
-            cos_angle = (trace - 1) / 2
-            cos_angle = torch.clamp(cos_angle, -1, 1)
-            rot_error_rad = torch.acos(cos_angle)
-            rot_error_deg = rot_error_rad * 180 / 3.14159265
+            metrics["rotation_error_deg"] = self.compute_RMD_error(R_gt, R_est)
             
-            # Return as 1D tensor (batch dimension) for AverageMetric
-            metrics["rotation_error_deg"] = rot_error_deg
-            
-            # Compute translation direction error (in degrees)
-            # Normalize both translations
-            t_est_norm = t_est / (t_est.norm(dim=-1, keepdim=True) + 1e-8)
-            t_gt_norm = t_gt / (t_gt.norm(dim=-1, keepdim=True) + 1e-8)
-            
-            # Angle between translation directions
-            cos_t = (t_est_norm * t_gt_norm).sum(-1)
-            cos_t = torch.clamp(cos_t.abs(), 0, 1)  # abs because t and -t are equivalent
-            t_error_rad = torch.acos(cos_t)
-            t_error_deg = t_error_rad * 180 / 3.14159265
-            
-            # Return as 1D tensor (batch dimension) for AverageMetric
-            metrics["translation_error_deg"] = t_error_deg
+            # Compute translation distance error 
+            metrics["translation_error_m"] = self.compute_ATE_error(t_gt, t_est)
             
         except Exception as e:
             # Geometry metrics are optional, don't fail on errors
             pass
         
         return metrics
+
+
+    def compute_RMD_error(self, R_gt, R_est):
+        R_rel = R_est @ R_gt.T
+        trace = R_rel.diagonal(dim1=-2, dim2=-1).sum(-1)
+        cos_angle = (trace - 1) / 2
+        cos_angle = torch.clamp(cos_angle, -1, 1)
+        rot_error_rad = torch.acos(cos_angle)
+        rot_error_deg = rot_error_rad * 180 / 3.14159265
+        return rot_error_deg
+
+    def compute_ATE_error(self, t_gt, t_est):
+        # Compute Euclidean distance: ||t_gt - t_est||_2
+        ate = torch.norm(t_gt - t_est, dim=-1)
+        return ate
+       

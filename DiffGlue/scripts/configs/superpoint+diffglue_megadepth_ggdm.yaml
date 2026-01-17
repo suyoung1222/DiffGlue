@@ -152,7 +152,7 @@ benchmarks:
         data:
             preprocessing:
                 side: long
-                resize: 1600
+                resize: 1024  # Match training resize for consistency
         eval:
             estimator: opencv
             ransac_th: 0.5

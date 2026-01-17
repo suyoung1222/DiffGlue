@@ -50,15 +50,15 @@ followers:
 
 
 estimators:
-  ggdm: 
-      module: estimators.estimate_rel_pose_ggdm
-      func: estimate_relative_pose
-  # baseline: 
-  #   module: estimators.estimate_rel_pose_diffglue_baseline
-  #   func: estimate_relative_pose
-  # e0:
-  #   module: estimators.estimate_rel_pose_diffglue_e0
-  #   func: estimate_relative_pose
+  # ggdm: 
+  #     module: estimators.estimate_rel_pose_ggdm
+  #     func: estimate_relative_pose
+  baseline: 
+    module: estimators.estimate_rel_pose_diffglue_baseline
+    func: estimate_relative_pose
+  e0:
+    module: estimators.estimate_rel_pose_diffglue_e0
+    func: estimate_relative_pose
   # e0_dino_vits16:
   #   module: estimators.estimate_rel_pose_diffglue_dino
   #   func: estimate_relative_pose

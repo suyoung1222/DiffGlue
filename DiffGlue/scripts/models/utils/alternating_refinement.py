@@ -636,6 +636,9 @@ class AlternatingRefinement(nn.Module):
             # This is needed for detector-free mode where no extractor provides keypoints
             self._populate_keypoints_from_loftr(matcher, data)
         
+        # Pass num_refinement_iters to matcher for adaptive layer usage
+        data["_num_refinement_iters"] = self.num_refinement_iters
+        
         # Run initial forward to get M_0
         pred = diffuser(matcher, data)
         

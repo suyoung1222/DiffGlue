@@ -7,7 +7,7 @@ import numpy as np
 import torch
 # from madpose.utils import get_depths
 from models.classic_matcher.bfmatching import BFMatching
-# from models.detector_free_matcher.detectorfreematching import DetectorFreeMatching
+from models.matching import Matching as DetectorFreeMatching
 import time
 
 # LightGlue + SuperPoint
@@ -470,65 +470,85 @@ def estimate_relative_pose(
     # Convert to torch
     inp_f = frame2tensor(follower_img_resized, device)  # Follower
     inp_l = frame2tensor(leader_img_resized, device)  # Leader
-
     # ----------------------------------------------------------------
     # Extract and Match keypoints with Some-Glue
     # ----------------------------------------------------------------
-    if isinstance(matcher, BFMatching):  # classic matcher (ORB + BFMatcher)
-        start_time = time.time()
-        pred = matcher({"image0": follower_img, "image1": leader_img})
-        # end_time = time.time()
-        kpts_f = pred["keypoints0"]  # (N,2)
-        kpts_l = pred["keypoints1"]  # (N,2)
-        matches = pred["matches0"]
-        
-        valid_mask = matches > -1
-        matched_kpts_f = kpts_f[valid_mask]
-        matched_kpts_l = kpts_l[valid_mask]
-        matching_scores = pred['matching_scores0'][valid_mask]
-        print(f"number of Valid matches: {len(matched_kpts_f)}")
 
-    elif isinstance(matcher, DetectorFreeMatching):  # classic matcher (ORB + BFMatcher)
-        start_time = time.time()
-        pred = matcher({"image0": follower_img, "image1": leader_img})
-        # end_time = time.time()
-        kpts_f = pred["keypoints0"]  # (N,2)
-        kpts_l = pred["keypoints1"]  # (N,2)
-        matches = pred["matches0"]
-        
-        valid_mask = matches > -1
-        matched_kpts_f = kpts_f[valid_mask]
-        matched_kpts_l = kpts_l[valid_mask]
-        matching_scores = pred['matching_scores0'][valid_mask]
-        print(f"number of Valid matches: {len(matched_kpts_f)}")
-
-    else:  # learning based matcher (glue)
-        start_time = time.time()
-        pred = matcher({"image0": inp_f, "image1": inp_l})
-        # end_time = time.time()
+    start_time = time.time()
+    pred = matcher({"image0": inp_f, "image1": inp_l})
+    # end_time = time.time()
+    # GGDM outputs torch tensors with batch dimension, convert to numpy
+    if isinstance(pred["keypoints0"], torch.Tensor):
         kpts_f = pred["keypoints0"][0].detach().cpu().numpy()  # (N,2)
         kpts_l = pred["keypoints1"][0].detach().cpu().numpy()  # (N,2)
         matches = pred["matches0"][0].detach().cpu().numpy()
-
-        valid_mask = matches > -1
-        matched_kpts_f = kpts_f[valid_mask]
-        matched_kpts_l = kpts_l[matches[valid_mask]]
-        matching_scores = pred['matching_scores0'][0].detach().cpu().numpy()[valid_mask]
-        print(f"number of Valid matches: {len(matched_kpts_f)}")
+        matching_scores = pred['matching_scores0'][0].detach().cpu().numpy()
+    else:
+        # Already numpy arrays (fallback)
+        kpts_f = pred["keypoints0"]  # (N,2)
+        kpts_l = pred["keypoints1"]  # (N,2)
+        matches = pred["matches0"]
+        matching_scores = pred['matching_scores0']
+    
+    valid_mask = matches > -1
+    matched_kpts_f = kpts_f[valid_mask]
+    matched_kpts_l = kpts_l[matches[valid_mask]]
+    matching_scores = matching_scores[valid_mask]
+    print(f"number of Valid matches: {len(matched_kpts_f)}")
 
     # fully invalid output initialization
     estimator_output = RelativePoseEstimatorOutput()
     if kpts_f.shape[0] == 0 or kpts_l.shape[0] == 0:
         return estimator_output
-        
 
     if len(matched_kpts_f) < 6:
         return estimator_output
 
-    
-
     # ----------------------------------------------------
-    # PNP solver based pose estimation
+    # Check if GGDM outputs pose directly (detector-free mode)
+    # ----------------------------------------------------
+    use_ggdm_pose = False
+    R_ggdm = None
+    t_ggdm = None
+    E_ggdm = None
+    
+    if "estimated_R" in pred and "estimated_t" in pred:
+        # GGDM outputs pose directly - extract it
+        try:
+            if isinstance(pred["estimated_R"], torch.Tensor):
+                R_ggdm = pred["estimated_R"][0].detach().cpu().numpy()  # (3, 3)
+                t_ggdm = pred["estimated_t"][0].detach().cpu().numpy()  # (3,)
+            else:
+                R_ggdm = pred["estimated_R"]  # Already numpy
+                t_ggdm = pred["estimated_t"]
+            
+            # Ensure correct shapes
+            if R_ggdm.shape != (3, 3):
+                R_ggdm = R_ggdm.reshape(3, 3)
+            if t_ggdm.shape != (3,):
+                t_ggdm = t_ggdm.reshape(3,)
+            
+            # Extract essential matrix if available
+            if "estimated_E" in pred:
+                if isinstance(pred["estimated_E"], torch.Tensor):
+                    E_ggdm = pred["estimated_E"][0].detach().cpu().numpy()
+                else:
+                    E_ggdm = pred["estimated_E"]
+                if E_ggdm.shape != (3, 3):
+                    E_ggdm = E_ggdm.reshape(3, 3)
+            
+            # Validate pose (check if rotation matrix is valid)
+            det_R = np.linalg.det(R_ggdm)
+            if np.abs(det_R - 1.0) < 0.1 and not np.isnan(R_ggdm).any() and not np.isnan(t_ggdm).any():
+                use_ggdm_pose = True
+                print("Using GGDM direct pose output")
+            else:
+                print(f"GGDM pose invalid (det(R)={det_R:.3f}), falling back to RANSAC")
+        except Exception as e:
+            print(f"Error extracting GGDM pose: {e}, falling back to RANSAC")
+    
+    # ----------------------------------------------------
+    # PNP solver based pose estimation (always compute as fallback/validation)
     # ----------------------------------------------------
     compute_pnp_solver_based_pose(
         estimator_output,
@@ -544,15 +564,42 @@ def estimate_relative_pose(
         scale_l_y,
         depth_scale,
     )
+    
     end_time = time.time()
-    pred_time = (end_time - start_time)*1000.0 # ms
+    pred_time = (end_time - start_time) * 1000.0  # ms
     estimator_output.pred_time = pred_time
+    
     # ----------------------------------------------------
-    # Essential Matrix based pose estimation
+    # Essential Matrix based pose estimation (always compute)
     # ----------------------------------------------------
     compute_essential_matrix_based_pose(
         estimator_output, K_follower, matched_kpts_f, matched_kpts_l
     )
+    
+    # ----------------------------------------------------
+    # Use GGDM pose if available and valid (overwrite RANSAC results)
+    # ----------------------------------------------------
+    if use_ggdm_pose:
+        estimator_output.R = R_ggdm
+        estimator_output.t = t_ggdm
+        estimator_output.valid = 1
+        
+        if E_ggdm is not None:
+            estimator_output.E = E_ggdm
+            estimator_output.valid_E = 1
+            # Also update E-based pose if essential matrix is available
+            estimator_output.R_E = R_ggdm
+            estimator_output.t_E = t_ggdm
+        else:
+            # If E not provided but R/t are, we can still use R/t
+            estimator_output.R_E = R_ggdm
+            estimator_output.t_E = t_ggdm
+            estimator_output.valid_E = 1
+        
+        # Store matched keypoints
+        estimator_output.matched_kpts_l = matched_kpts_l
+        estimator_output.matched_kpts_f = matched_kpts_f
+        estimator_output.score = matching_scores.tolist() if isinstance(matching_scores, np.ndarray) else matching_scores
     # ----------------------------------------------------
     # MADPose based pose estimation
     # ----------------------------------------------------

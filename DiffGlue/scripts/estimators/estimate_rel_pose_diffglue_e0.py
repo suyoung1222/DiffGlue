@@ -17,7 +17,7 @@ matcher_config = {
         "nms_radius": 4,
         "keypoint_threshold": 0.0005,  # 0.005,
         "max_keypoints": 1024,
-        "ckpt": Path(__file__).parent.parent / "models/weights/SP_DiffGlue_e0.tar",
+        "ckpt": Path(__file__).parent.parent / "/home/suyoung/mydata/Diffglue/weights/checkpoint_best_ggdm_80_2.tar",
     },
 }
 matcher = Matching(matcher_config).eval().to(device)

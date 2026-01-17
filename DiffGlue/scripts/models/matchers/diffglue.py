@@ -1095,7 +1095,7 @@ class DiffGlue(nn.Module):
         # Get attention bias from alternating refinement loop (if provided)
         # This allows feeding refined match distributions back to LoFTR
         attention_bias = data.get("_attention_bias", None)
-            
+        # pdb.set_trace()
         # # Off the shelf (superpoint)
         # kpts0_old, kpts1_old = data["keypoints0"], data["keypoints1"]
         # desc0_old = data["descriptors0"].contiguous()
@@ -1216,15 +1216,27 @@ class DiffGlue(nn.Module):
 
         # GNN + final_proj + assignment
         all_desc0, all_desc1 = [], []
-
-        for i in range(self.conf.n_layers): # Iteration Start
+        
+        # Get num_refinement_iters from data dict (passed by alternating_refinement)
+        # or fall back to n_layers if not available
+        if self.training:
+            n_layers_to_use = self.conf.n_layers
+        else:
+            # Try to get from data dict (set by alternating_refinement module)
+            num_refinement_iters = data.get("_num_refinement_iters", None)
+            if num_refinement_iters is not None:
+                n_layers_to_use = num_refinement_iters
+            else:
+                # Fallback: use n_layers if refinement iters not provided
+                n_layers_to_use = self.conf.n_layers
+        for i in range(n_layers_to_use):  # Iteration Start
             # NOTE: Checkpointing is disabled because it causes backward pass to hang
             # when matcher is called from diffuser. The diffuser's training_losses() calls
             # matcher.forward() which creates nested autograd contexts that deadlock.
             # To re-enable, set use_checkpoint = self.conf.checkpointed and self.training
             # and ensure checkpointing works with your diffuser setup.
             desc0, desc1 = self.transformers[i](desc0, desc1, encoding0, encoding1, time_embd, adj_mat_fore[...,:-1,:-1])
-            if self.training or i == self.conf.n_layers - 1:
+            if self.training or i == n_layers_to_use - 1:
                 all_desc0.append(desc0)
                 all_desc1.append(desc1)
                 continue  # no early stopping or adaptive width at last layer
@@ -1232,7 +1244,7 @@ class DiffGlue(nn.Module):
         desc0, desc1 = desc0[..., :m, :], desc1[..., :n, :]
         scores, _ = self.log_assignment[i](desc0, desc1)
         m0, m1, mscores0, mscores1 = filter_matches(scores, self.conf.filter_threshold)
-
+        pdb.set_trace()
         adj_mat = scores.unsqueeze(1).clone()
         adj_mat[...,:-1,:-1] = (adj_mat[...,:-1,:-1].exp()-0.5)*self.conf.scale
         adj_mat[...,:-1,-1] = (adj_mat[...,:-1,-1].exp()-0.5)*self.conf.scale

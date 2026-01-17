@@ -18,7 +18,7 @@ matcher_config = {
         "keypoint_threshold": 0.0005,  # 0.005,
         "max_keypoints":  1024,
         "ckpt": Path(__file__).parent.parent
-        / "models/weights/SP_DiffGlue.tar",
+        / "/home/suyoung/mydata/Diffglue/weights/SP_DiffGlue.tar",
         # "ckpt" : Path("/home/suyoung/Documents/limo/agilex_open_class/limo/limo_gazebo_sim/scripts/models/weights/SP_DiffGlue.tar")
     },
 }
