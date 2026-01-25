@@ -1366,13 +1366,15 @@ class DiffGlue(nn.Module):
 
             # for debug and visualization
             # self._visualize_coarse_matching(data, desc0, desc1, kpts0, kpts1, i)
+            print("layer", i, "desc0:", desc0[0][1][:10], 'desc1:', desc1[0][1][:10])
 
         desc0, desc1 = desc0[..., :m, :], desc1[..., :n, :]
         scores, _ = self.log_assignment[i](desc0, desc1)
         m0, m1, mscores0, mscores1 = filter_matches(scores, self.conf.filter_threshold)
         
         # Fine matching visualization
-        self._visualize_fine_matching(data, m0, m1, mscores0, mscores1)
+        # self._visualize_fine_matching(data, m0, m1, mscores0, mscores1)
+        pdb.set_trace()
         adj_mat = scores.unsqueeze(1).clone()
         adj_mat[...,:-1,:-1] = (adj_mat[...,:-1,:-1].exp()-0.5)*self.conf.scale
         adj_mat[...,:-1,-1] = (adj_mat[...,:-1,-1].exp()-0.5)*self.conf.scale
