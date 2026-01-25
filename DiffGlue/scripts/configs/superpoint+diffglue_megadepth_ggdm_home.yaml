@@ -1,0 +1,178 @@
+# GGDM End-to-End Training with Warmup
+# =====================================
+# This config trains DiffGlue with the full GGDM (Geometry-Guided Alternating
+# Transformer-Diffusion Matching) approach using warmup-based training:
+#
+# Training Schedule (40 epochs):
+#   - Epochs 0-19 (warmup): Standard DSM training (L_DSM only)
+#   - Epochs 20-39: Unrolled GGDM training (L_DSM + L_match + L_pose)
+#
+# This is end-to-end - no manual checkpoint loading required!
+#
+# Usage:
+#   python -m scripts.train SP+DiffGlue_ggdm \
+#       --conf scripts/configs/superpoint+diffglue_megadepth_ggdm.yaml \
+#       data.load_features.do=True
+#
+# Prerequisites:
+#   - Download LoFTR weights: python scripts/download_loftr_weights.py
+#   - Cache SuperPoint features: python -m scripts.cache.export_megadepth --method sp --num_workers 8
+
+data:
+    name: megadepth
+    preprocessing:
+        resize: 1024
+        side: long
+        square_pad: True
+    train_split: train_scenes_clean.txt
+    train_num_per_scene: 300
+    val_split: valid_scenes_clean.txt
+    val_pairs: valid_pairs.txt
+    min_overlap: 0.1
+    max_overlap: 0.7
+    num_overlap_bins: 3
+    read_depth: true
+    read_image: true
+    # Memory guide for batch_size (with checkpointed=true):
+    #   24GB GPU: batch_size=2-3
+    #   40GB GPU: batch_size=6-8 (recommended: 6)
+    #   80GB GPU: batch_size=8-12
+    # Unrolled training uses ~50% more memory than DSM warmup phase
+    batch_size: 1  # For 40GB GPU
+    num_workers: 4
+    load_features:
+        do: true
+        path: exports/megadepth-undist-depth-r1024_SP-k1024-nms3/{scene}.h5
+        padding_length: 1024
+        padding_fn: pad_local_features
+
+model:
+    name: two_view_pipeline
+    extractor:
+        name: extractors.superpoint
+        max_num_keypoints: 1024
+        force_num_keypoints: True
+        detection_threshold: 0.0
+        nms_radius: 3
+        trainable: False
+    matcher:
+        name: matchers.diffglue
+        filter_threshold: 0.1
+        # === SPEED OPTIMIZATIONS ===
+        # Requires PyTorch 2.0+ and compatible GPU (Ampere/Ada/Hopper)
+        # PyTorch 2.2+ automatically uses FlashAttention-2 backend
+        flash: true             # Enable for ~2x faster attention
+        checkpointed: true      # Gradient checkpointing - saves memory
+        n_layers: 9             # Can reduce to 6 for faster training with minor quality loss
+        scale: 2
+        epipolar: enabled
+        epi_weight: 1.0
+        matcher_loss_weight: 0.1
+        # LoFTR pretrained weights
+        loftr_pretrained: outdoor_ds.ckpt
+        # Freezing during warmup, then unfreezing for end-to-end fine-tuning
+        # This is controlled by unfreeze_after_warmup in refinement section
+        freeze_loftr_backbone: true   # Initially frozen - unfrozen after warmup
+        freeze_loftr_coarse: false    # Keep coarse matching trainable
+    ground_truth:
+        name: matchers.depth_matcher
+        th_positive: 3
+        th_negative: 5
+        th_epi: 5
+    diffuser:
+        name: diffusers.diffuser
+        steps: 4096
+        learn_sigma: False
+        sigma_small: False
+        noise_schedule: "linear"
+        use_kl: False
+        predict_xstart: True
+        rescale_timesteps: True
+        rescale_learned_sigmas: True
+        timestep_respacing: ""
+        ddim_steps: 2
+        schedule_sampler: "uniform"
+        use_ddim: True
+        clip_denoised: True
+        diffuser_loss_weight: 1
+        scale: 2
+    
+    # ========================================
+    # GGDM with Warmup-based Training
+    # ========================================
+    refinement:
+        # Inference settings (full GGDM loop)
+        num_refinement_iters: 9        # K=3 iterations at inference
+        use_geometry_guidance: true    # Enable geometry guidance
+        geometry_guidance_weight: 0.1  # λ for geometry gradient
+        feedback_to_loftr: true        # Enable attention bias feedback
+        feedback_scale: 0.5            # γ for B^(k) = γ log(M̃ + ε)
+        geometry_error_type: "sampson"
+        min_matches_for_E: 8
+        top_k_candidates: 500
+        reliability_threshold: 0.1
+        init_from_previous: true
+        
+        # Unrolled training with warmup
+        unrolled_training: true        # Enable unrolled GGDM
+        unrolled_k: 2                  # K=2 during training
+        unrolled_t: 4                  # T=4 diffusion steps
+        loss_match_weight: 1.0         # λ_match
+        loss_pose_weight: 0.1          # λ_pose
+        
+        # *** WARMUP: Key setting for e2e training ***
+        # First 20 epochs: standard DSM (stable initialization)
+        # After 20 epochs: switch to unrolled GGDM (end-to-end refinement)
+        warmup_epochs: 20
+        
+        # Gradual unfreezing: unfreeze LoFTR backbone after warmup
+        # Benefits: allows backbone to adapt to geometry-guided learning
+        # Uses discriminative fine-tuning (lower LR for backbone)
+        unfreeze_backbone_after_warmup: true
+        backbone_lr_factor: 0.1       # Backbone LR = main_LR * 0.1
+    
+    allow_no_extract: True
+
+train:
+    seed: 0
+    epochs: 40
+    log_every_iter: 100
+    eval_every_iter: 500
+    save_every_iter: 500
+    lr: 1e-4
+    lr_schedule:
+        start: 3
+        type: exp
+        on_epoch: true
+        exp_div_10: 10
+    dataset_callback_fn: sample_new_items
+
+benchmarks:
+    megadepth1500:
+        data:
+            preprocessing:
+                side: long
+                resize: 1024  # Match training resize for consistency
+        eval:
+            estimator: opencv
+            ransac_th: 0.5
+    hpatches:
+        eval:
+            estimator: opencv
+            ransac_th: 0.5
+        model:
+            extractor:
+                max_num_keypoints: 1024
+
+# =====================================
+# Training Progress Indicator
+# =====================================
+# The training script will log:
+#   "Switching from DSM to unrolled GGDM training" at epoch 20
+#
+# Expected losses:
+#   - Epochs 0-19: Only L_DSM (diffuser loss)
+#   - Epochs 20-39: L_DSM + L_match + L_pose
+#
+# Memory usage increases after epoch 20 due to unrolled backprop
+
