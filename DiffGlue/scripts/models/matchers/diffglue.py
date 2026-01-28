@@ -1084,127 +1084,6 @@ class DiffGlue(nn.Module):
                 self.transformers[i], mode=mode, fullgraph=True
             )
 
-    def _visualize_coarse_matching(self, data: dict, desc0: torch.Tensor, desc1: torch.Tensor, 
-                                   kpts0: torch.Tensor, kpts1: torch.Tensor, iteration: int):
-        """Visualize coarse matching results during refinement iterations."""
-        batch_idx = 0
-        img0 = data["view0"]["image"][batch_idx, 0].cpu().numpy()
-        img1 = data["view1"]["image"][batch_idx, 0].cpu().numpy()
-        kpts0_orig = data["keypoints0"][batch_idx].cpu().numpy()
-        kpts1_orig = data["keypoints1"][batch_idx].cpu().numpy()
-        num_kpts0, num_kpts1 = len(kpts0_orig), len(kpts1_orig)
-        desc0_curr = desc0[batch_idx, :num_kpts0].cpu().numpy() if num_kpts0 > 0 else np.array([]).reshape(0, desc0.shape[-1])
-        desc1_curr = desc1[batch_idx, :num_kpts1].cpu().numpy() if num_kpts1 > 0 else np.array([]).reshape(0, desc1.shape[-1])
-        kpts0_norm = kpts0[batch_idx, :num_kpts0, :2].cpu().numpy() if num_kpts0 > 0 else np.array([]).reshape(0, 2)
-        kpts1_norm = kpts1[batch_idx, :num_kpts1, :2].cpu().numpy() if num_kpts1 > 0 else np.array([]).reshape(0, 2)
-        print("=" * 80)
-        print(f"VISUALIZATION - Iteration {iteration} (after coarse matching)")
-        print("=" * 80)
-        print(f"\nImage 0: Shape={img0.shape}, Keypoints={num_kpts0}, Descriptors={desc0_curr.shape}")
-        print(f"Image 1: Shape={img1.shape}, Keypoints={num_kpts1}, Descriptors={desc1_curr.shape}")
-        if num_kpts0 > 0:
-            print(f"  First 5 kpts0 (img coords):\n{kpts0_orig[:min(5, num_kpts0)]}")
-            print(f"  First 5 kpts0 (normalized):\n{kpts0_norm[:min(5, num_kpts0)]}")
-            print(f"  desc0 stats: mean={desc0_curr.mean():.4f}, std={desc0_curr.std():.4f}")
-        if num_kpts1 > 0:
-            print(f"  First 5 kpts1 (img coords):\n{kpts1_orig[:min(5, num_kpts1)]}")
-            print(f"  First 5 kpts1 (normalized):\n{kpts1_norm[:min(5, num_kpts1)]}")
-            print(f"  desc1 stats: mean={desc1_curr.mean():.4f}, std={desc1_curr.std():.4f}")
-        print("=" * 80)
-        fig, axes = plt.subplots(2, 2, figsize=(15, 15))
-        axes[0, 0].imshow(img0, cmap='gray')
-        axes[0, 0].set_title(f'Original Input Image 0\nShape: {img0.shape}')
-        axes[0, 0].axis('off')
-        axes[0, 1].imshow(img1, cmap='gray')
-        axes[0, 1].set_title(f'Original Input Image 1\nShape: {img1.shape}')
-        axes[0, 1].axis('off')
-        axes[1, 0].imshow(img0, cmap='gray')
-        if num_kpts0 > 0:
-            axes[1, 0].scatter(kpts0_orig[:, 0], kpts0_orig[:, 1], c='red', s=10, alpha=0.6, marker='x')
-        axes[1, 0].set_title(f'Image 0 After Coarse Matching\n{num_kpts0} keypoints')
-        axes[1, 0].axis('off')
-        axes[1, 1].imshow(img1, cmap='gray')
-        if num_kpts1 > 0:
-            axes[1, 1].scatter(kpts1_orig[:, 0], kpts1_orig[:, 1], c='red', s=10, alpha=0.6, marker='x')
-        axes[1, 1].set_title(f'Image 1 After Coarse Matching\n{num_kpts1} keypoints')
-        axes[1, 1].axis('off')
-        plt.tight_layout()
-        plt.show()
-        pdb.set_trace()
-
-    def _visualize_fine_matching(self, data: dict, m0: torch.Tensor, m1: torch.Tensor, 
-                                 mscores0: torch.Tensor, mscores1: torch.Tensor):
-        """Visualize final fine matching results."""
-        batch_idx = 0
-        img0 = data["view0"]["image"][batch_idx, 0].cpu().numpy()
-        img1 = data["view1"]["image"][batch_idx, 0].cpu().numpy()
-        kpts0_orig = data["keypoints0"][batch_idx].cpu().numpy()
-        kpts1_orig = data["keypoints1"][batch_idx].cpu().numpy()
-        m0_final = m0[batch_idx].cpu().numpy()
-        m1_final = m1[batch_idx].cpu().numpy()
-        mscores0_final = mscores0[batch_idx].cpu().numpy()
-        mscores1_final = mscores1[batch_idx].cpu().numpy()
-        valid_matches = m0_final >= 0
-        num_valid_matches = valid_matches.sum()
-        print("\n" + "=" * 80)
-        print("FINE MATCHING RESULTS (Final)")
-        print("=" * 80)
-        print(f"Keypoints: Image0={len(kpts0_orig)}, Image1={len(kpts1_orig)}")
-        print(f"Valid matches: {num_valid_matches}")
-        if len(kpts0_orig) > 0:
-            print(f"Match rate (img0): {num_valid_matches / len(kpts0_orig) * 100:.2f}%")
-        if len(kpts1_orig) > 0:
-            print(f"Match rate (img1): {num_valid_matches / len(kpts1_orig) * 100:.2f}%")
-        if num_valid_matches > 0:
-            print(f"Score stats - mscores0: mean={mscores0_final[valid_matches].mean():.4f}, std={mscores0_final[valid_matches].std():.4f}")
-            print(f"Score stats - mscores1: mean={mscores1_final[valid_matches].mean():.4f}, std={mscores1_final[valid_matches].std():.4f}")
-            print(f"First 10 matches:")
-            for idx in np.where(valid_matches)[0][:10]:
-                print(f"  {idx}: {kpts0_orig[idx]} <-> {kpts1_orig[m0_final[idx]]}, scores=({mscores0_final[idx]:.4f}, {mscores1_final[m0_final[idx]]:.4f})")
-        print("=" * 80)
-        fig, axes = plt.subplots(1, 2, figsize=(20, 10))
-        h0, w0, h1, w1 = img0.shape[0], img0.shape[1], img1.shape[0], img1.shape[1]
-        max_h, total_w = max(h0, h1), w0 + w1
-        combined_img = np.zeros((max_h, total_w), dtype=img0.dtype)
-        combined_img[:h0, :w0] = img0
-        combined_img[:h1, w0:w0+w1] = img1
-        axes[0].imshow(combined_img, cmap='gray')
-        axes[0].set_title(f'Fine Matching Results\n{num_valid_matches} valid matches out of {len(kpts0_orig)} keypoints')
-        axes[0].axis('off')
-        if num_valid_matches > 0:
-            axes[0].scatter(kpts0_orig[:, 0], kpts0_orig[:, 1], c='red', s=20, alpha=0.7, marker='o', label='Image 0', zorder=3)
-            kpts1_offset = kpts1_orig.copy()
-            kpts1_offset[:, 0] += w0
-            axes[0].scatter(kpts1_offset[:, 0], kpts1_offset[:, 1], c='blue', s=20, alpha=0.7, marker='o', label='Image 1', zorder=3)
-            valid_indices = np.where(valid_matches)[0]
-            all_scores = np.concatenate([mscores0_final[valid_matches], mscores1_final[valid_matches]])
-            score_min, score_max = (all_scores.min(), all_scores.max()) if len(all_scores) > 0 else (0.0, 1.0)
-            score_range = score_max - score_min if score_max > score_min else 1.0
-            for idx in valid_indices:
-                kpt0, kpt1 = kpts0_orig[idx], kpts1_orig[m0_final[idx]]
-                kpt1_offset = kpt1.copy()
-                kpt1_offset[0] += w0
-                score = (mscores0_final[idx] + mscores1_final[m0_final[idx]]) / 2.0
-                score_norm = np.clip((score - score_min) / score_range, 0.0, 1.0)
-                axes[0].plot([kpt0[0], kpt1_offset[0]], [kpt0[1], kpt1_offset[1]], 
-                            color=plt.cm.viridis(score_norm), alpha=0.6, linewidth=1.5, zorder=2)
-            axes[0].legend(loc='upper right')
-        if num_valid_matches > 0:
-            axes[1].hist(mscores0_final[valid_matches], bins=50, alpha=0.7, label='mscores0', color='red')
-            axes[1].hist(mscores1_final[valid_matches], bins=50, alpha=0.7, label='mscores1', color='blue')
-            axes[1].set_xlabel('Match Score')
-            axes[1].set_ylabel('Frequency')
-            axes[1].set_title(f'Match Score Distribution\n({num_valid_matches} valid matches)')
-            axes[1].legend()
-            axes[1].grid(True, alpha=0.3)
-        else:
-            axes[1].text(0.5, 0.5, 'No valid matches', ha='center', va='center', transform=axes[1].transAxes)
-            axes[1].set_title('Match Score Distribution\n(No matches)')
-            axes[1].axis('off')
-        plt.tight_layout()
-        plt.show()
-        pdb.set_trace()
-
     def forward(self, adj_mat_fore, timesteps, data: dict) -> dict:
         adj_mat_fore[...,:-1,:-1] = adj_mat_fore[...,:-1,:-1]/self.conf.scale+0.5
         adj_mat_fore[...,:-1,-1] = adj_mat_fore[...,:-1,-1]/self.conf.scale+0.5
@@ -1218,19 +1097,7 @@ class DiffGlue(nn.Module):
         # Get attention bias from alternating refinement loop (if provided)
         # This allows feeding refined match distributions back to LoFTR
         attention_bias = data.get("_attention_bias", None)
-        # pdb.set_trace()
-        # # Off the shelf (superpoint)
-        # kpts0_old, kpts1_old = data["keypoints0"], data["keypoints1"]
-        # desc0_old = data["descriptors0"].contiguous()
-        # desc1_old = data["descriptors1"].contiguous()
-        # print("desc0:", desc0_old.shape, 'kpts0:', kpts0_old.shape) 
-        
-        # # detector free
-        # pdb.set_trace()
-        # kpts0, desc0, conf0 = self.keypoint_encoder(data['view0']['image'])
-        # kpts1, desc1, conf1 = self.keypoint_encoder(data['view1']['image'])
-        
-        
+
         # 1. Local Feature CNN
         data.update({
             'bs': data["view0"]["image"].size(0), # B, [B,3,H,W]???
@@ -1273,8 +1140,11 @@ class DiffGlue(nn.Module):
 
         # 2. coarse-level loftr module
         # add featmap with positional encoding, then flatten it to sequence [N, HW, C]
-        feat_c0 = rearrange(self.pos_encoding(feat_c0), 'n c h w -> n (h w) c')
-        feat_c1 = rearrange(self.pos_encoding(feat_c1), 'n c h w -> n (h w) c')
+        encoding0 = self.posenc(feat_c0)
+        encoding1 = self.posenc(feat_c1)
+        feat_c0 = rearrange(encoding0, 'n c h w -> n (h w) c')
+        feat_c1 = rearrange(encoding1, 'n c h w -> n (h w) c')
+  
 
         mask_c0 = mask_c1 = None  # mask is useful in training
         if 'mask0' in data:
@@ -1285,6 +1155,7 @@ class DiffGlue(nn.Module):
         # This adds to data: keypoints0, keypoints1, descriptors0, descriptors1
         # - keypoints0/1: [B, L, 2] dense coarse grid positions in image coordinates
         # - descriptors0/1: [B, L, C] LoFTR coarse features after transformer (feat_c0, feat_c1)
+        pdb.set_trace()
         self.coarse_matching(feat_c0, feat_c1, data, mask_c0=mask_c0, mask_c1=mask_c1, attention_bias=attention_bias)     
 
         # Extract keypoints and descriptors from data (set by coarse_matching.get_contextual_match)
@@ -1321,21 +1192,6 @@ class DiffGlue(nn.Module):
         # Extract descriptors from data (LoFTR coarse features set by coarse_matching.get_contextual_match)
         desc0 = data["descriptors0"].contiguous()  # [B, L, C] - original LoFTR coarse descriptors
         desc1 = data["descriptors1"].contiguous()  # [B, S, C] - original LoFTR coarse descriptors
-
-        assert desc0.shape[-1] == self.conf.input_dim
-        assert desc1.shape[-1] == self.conf.input_dim
-        if torch.is_autocast_enabled():
-            desc0 = desc0.half()
-            desc1 = desc1.half()
-        desc0 = self.input_proj(desc0)
-        desc1 = self.input_proj(desc1)
-        # cache positional embeddings
-        encoding0 = self.posenc(kpts0)
-        encoding1 = self.posenc(kpts1)
-        if torch.isnan(encoding0).any() or torch.isnan(encoding1).any():
-            encoding0 = encoding0
-            encoding1 = encoding1
-            assert 1==2
 
         # GNN + final_proj + assignment
         all_desc0, all_desc1 = [], []
